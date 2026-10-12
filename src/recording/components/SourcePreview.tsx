@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
-import { AppWindow, Monitor, MonitorUp, PanelTop, Volume2, VolumeX } from 'lucide-react';
+import { AppWindow, Monitor, MonitorUp, MousePointerClick, PanelTop, Volume2, VolumeX } from 'lucide-react';
 import { CAPTURE_SOURCE_NOUN } from '@/shared/captureSources';
 import { Button, EmptyState, Panel } from '@/shared/components';
-import type { CaptureSource, SelectedSurface } from '@/types';
+import type { CaptureSource, CaptureTarget, SelectedSurface } from '@/types';
 import { cn } from '@/utils/cn';
 import { StreamVideo } from './StreamVideo';
 
@@ -26,7 +26,10 @@ export interface SourcePreviewProps {
   selecting: boolean;
   disabled: boolean;
   recording: boolean;
+  /** The tab ZoomCapture was opened on, offered for direct capture with click tracking. */
+  target?: CaptureTarget | null;
   onSelect: () => void;
+  onSelectTarget?: () => void;
   /** Rendered over the video (camera bubble, countdown). */
   overlay?: ReactNode;
   /** Transport controls. */
@@ -41,7 +44,9 @@ export function SourcePreview({
   selecting,
   disabled,
   recording,
+  target,
   onSelect,
+  onSelectTarget,
   overlay,
   footer,
 }: SourcePreviewProps) {
@@ -62,16 +67,34 @@ export function SourcePreview({
           </>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(ellipse_at_center,var(--color-surface-2),var(--color-canvas))]">
-            <EmptyState
-              icon={MonitorUp}
-              title={`Choose the ${CAPTURE_SOURCE_NOUN[source]} to record`}
-              description="Chrome will open its sharing picker. You can pick any screen, window or tab there."
-              action={
-                <Button variant="primary" icon={MonitorUp} loading={selecting} disabled={disabled} onClick={onSelect}>
-                  Choose {CAPTURE_SOURCE_NOUN[source]}
-                </Button>
-              }
-            />
+            {target && onSelectTarget ? (
+              <EmptyState
+                icon={MousePointerClick}
+                title={`Record “${target.title || target.origin}”`}
+                description="ZoomCapture was opened on this tab, so it can record it directly and track your clicks there for automatic zoom."
+                action={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    <Button variant="ghost" disabled={disabled || selecting} onClick={onSelect}>
+                      Choose another tab
+                    </Button>
+                    <Button variant="primary" icon={PanelTop} loading={selecting} disabled={disabled} onClick={onSelectTarget}>
+                      Record this tab
+                    </Button>
+                  </div>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={MonitorUp}
+                title={`Choose the ${CAPTURE_SOURCE_NOUN[source]} to record`}
+                description="Chrome will open its sharing picker. You can pick any screen, window or tab there."
+                action={
+                  <Button variant="primary" icon={MonitorUp} loading={selecting} disabled={disabled} onClick={onSelect}>
+                    Choose {CAPTURE_SOURCE_NOUN[source]}
+                  </Button>
+                }
+              />
+            )}
           </div>
         )}
       </div>

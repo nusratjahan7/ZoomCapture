@@ -1,5 +1,6 @@
 import type { CameraLayout, CaptureSourceInfo } from './project';
 import type { RecordingTrackKind } from './session';
+import type { AutoZoomSettings, ClickTrackingInfo, InteractionEvent } from './zoom';
 
 /**
  * A saved recording: the original, immutable capture. Listing recordings reads only these small
@@ -27,6 +28,9 @@ export interface Recording {
   /** Every original media asset (screen, camera, microphone, system audio). */
   assetIds: string[];
   thumbnailAssetId?: string;
+  /** Clicks captured during recording (original data; zoom markers derived from them live in the Project). */
+  interactions: InteractionEvent[];
+  clickTracking: ClickTrackingInfo;
   createdAt: number;
   updatedAt: number;
 }
@@ -45,6 +49,10 @@ export interface RecordingDraft {
   tracks: DraftTrack[];
   cameraLayout?: CameraLayout;
   source?: CaptureSourceInfo;
+  interactions?: InteractionEvent[];
+  clickTracking?: ClickTrackingInfo;
+  /** Automatic-zoom preferences at recording time, applied when the recording is saved. */
+  autoZoom?: AutoZoomSettings;
   /** Reserved when saving starts, so a resumed save produces the same ids. */
   recordingId?: string;
   projectId?: string;

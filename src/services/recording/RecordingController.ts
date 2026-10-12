@@ -1,5 +1,16 @@
 import { saveDraft } from '@/services/storage/recordingDraftRepository';
-import type { CameraLayout, CaptureSourceInfo, DraftTrack, RecordingDraft, RecordingTrackInfo, RecordingTrackKind } from '@/types';
+import { isDuplicateClick, toInteraction, type IgnoredReason, type TrackedClick } from '@/services/zoom/clicks';
+import type {
+  AutoZoomSettings,
+  CameraLayout,
+  CaptureSourceInfo,
+  ClickTrackingInfo,
+  DraftTrack,
+  InteractionEvent,
+  RecordingDraft,
+  RecordingTrackInfo,
+  RecordingTrackKind,
+} from '@/types';
 import { createId } from '@/utils/id';
 import { mixAudioTracks, type MixedAudio } from './audioMixer';
 import { AUDIO_BITRATE, CAMERA_BITRATE, pickMimeType, videoBitrate } from './mimeTypes';
@@ -23,6 +34,10 @@ export interface RecordingControllerOptions {
   name: string;
   source: CaptureSourceInfo;
   cameraLayout: CameraLayout;
+  /** Whether clicks can be tracked for this capture (and why not). */
+  clickTracking: ClickTrackingInfo;
+  /** Applied when the recording is saved (automatic zoom markers). */
+  autoZoom: AutoZoomSettings;
   /** A source track ended by itself (sharing stopped, device unplugged…). */
   onTrackEnded: (kind: RecordingTrackKind) => void;
   /** Recording cannot continue (recorder failure, storage full…). */
@@ -71,6 +86,9 @@ export class RecordingController {
       durationMs: 0,
       tracks: [],
       cameraLayout: cameraTrack ? options.cameraLayout : undefined,
+      interactions: [],
+      clickTracking: options.clickTracking,
+      autoZoom: options.autoZoom,
       source: options.source,
       createdAt: now,
       updatedAt: now,
@@ -209,6 +227,30 @@ export class RecordingController {
   /** Records black frames on the camera track while hidden; the camera stays open. */
   setCameraHidden(hidden: boolean): void {
     this.options.inputs.camera?.getVideoTracks().forEach((track) => (track.enabled = !hidden));
+  }
+
+  /**
+   * Places a click from the recorded tab on the timeline using the moment it happened (not when
+   * the message arrived). Clicks while paused, outside the content, synthetic or duplicated
+   * (double-click, re-delivered message) are ignored. Saved with the next draft checkpoint.
+   */
+  addTrackedClick(click: TrackedClick): { event: InteractionEvent } | { ignored: IgnoredReason | 'duplicate' } {
+    if (this.state !== 'recording' && this.state !== 'paused') return { ignored: 'not-recording' };
+    const result = toInteraction(click, this.clock.recordedTimeAtEpoch(click.epochMs), createId('ev'));
+    if (!('event' in result)) return result;
+    const interactions = this.draft.interactions ?? [];
+    if (isDuplicateClick(interactions.at(-1), result.event)) return { ignored: 'duplicate' };
+    this.draft.interactions = [...interactions, result.event];
+    return result;
+  }
+
+  get clickCount(): number {
+    return this.draft.interactions?.length ?? 0;
+  }
+
+  /** Records a change in tracking availability (e.g. the page navigated). */
+  setClickTracking(info: ClickTrackingInfo): void {
+    this.draft.clickTracking = info;
   }
 
   setCameraLayout(layout: CameraLayout): void {

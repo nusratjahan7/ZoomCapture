@@ -1,5 +1,6 @@
 import type { CameraLayout } from './project';
 import type { CaptureSource } from './session';
+import type { AutoZoomSettings } from './zoom';
 
 export type CaptureResolution = 'native' | '1080p' | '1440p' | '2160p';
 export type CaptureFrameRate = 30 | 60;
@@ -21,6 +22,7 @@ export interface UserSettings {
   floatingControls: boolean;
   /** Last camera bubble placement; copied into each new project. */
   cameraBubble: CameraLayout;
+  autoZoom: AutoZoomSettings;
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
@@ -35,4 +37,5 @@ export const DEFAULT_SETTINGS: UserSettings = {
   countdownSeconds: 3,
   floatingControls: true,
   cameraBubble: { x: 0.86, y: 0.78, size: 'medium' },
+  autoZoom: { enabled: true, trackClicks: true, scale: 2, durationMs: 2500, transitionSpeed: 'normal' },
 };

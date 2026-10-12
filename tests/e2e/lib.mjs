@@ -21,7 +21,7 @@ export async function findChrome() {
  * Branded Chrome no longer loads unpacked extensions from the command line, so Chrome for Testing
  * is used. The same `userDataDir` across launches simulates closing and reopening the browser.
  */
-export async function launch(userDataDir) {
+export async function launch(userDataDir, { fakeMedia = true } = {}) {
   const browser = await puppeteer.launch({
     executablePath: await findChrome(),
     headless: true,
@@ -29,12 +29,16 @@ export async function launch(userDataDir) {
     userDataDir,
     protocolTimeout: 60_000,
     enableExtensions: [DIST],
-    args: [
-      '--use-fake-ui-for-media-stream',
-      '--use-fake-device-for-media-stream',
-      '--auto-select-desktop-capture-source=Entire screen',
-      '--window-size=1400,900',
-    ],
+    // Fake devices stand in for the screen picker, camera and microphone. They also hijack
+    // chromeMediaSource 'tab' streams, so direct tab capture runs without them.
+    args: fakeMedia
+      ? [
+          '--use-fake-ui-for-media-stream',
+          '--use-fake-device-for-media-stream',
+          '--auto-select-desktop-capture-source=Entire screen',
+          '--window-size=1400,900',
+        ]
+      : ['--window-size=1400,900', '--autoplay-policy=no-user-gesture-required'],
     defaultViewport: { width: 1400, height: 900 },
   });
   const target = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('/background.js'));
@@ -62,8 +66,9 @@ export const button = (page, text, timeout = 15_000) =>
 export const dialogButton = (page, text, timeout = 15_000) =>
   page.waitForSelector(`xpath/.//dialog[@open]//button[contains(normalize-space(.), "${text}")]`, { timeout });
 
+/** Interval polling (not requestAnimationFrame), so it also works for pages in background tabs. */
 export const waitForText = (page, text, timeout = 20_000) =>
-  page.waitForFunction((t) => document.body.innerText.includes(t), { timeout }, text);
+  page.waitForFunction((t) => document.body.innerText.includes(t), { timeout, polling: 200 }, text);
 
 /** Reads row counts straight from the extension's IndexedDB. */
 export function dbCounts(page) {

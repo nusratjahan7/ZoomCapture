@@ -10,11 +10,14 @@ export interface ToastOptions {
   variant?: ToastVariant;
   /** Milliseconds before auto-dismissal. Defaults to 4.5s (7s for errors). */
   duration?: number;
+  /** Optional button, e.g. "Undo". The toast closes when it is clicked. */
+  action?: { label: string; onClick: () => void };
 }
 
 interface ToastItem extends Required<Pick<ToastOptions, 'title' | 'variant'>> {
   id: number;
   description?: string;
+  action?: ToastOptions['action'];
 }
 
 interface ToastContextValue {
@@ -36,9 +39,9 @@ export function ToastProvider({ children, placement = 'bottom-right' }: { childr
   }, []);
 
   const show = useCallback(
-    ({ title, description, variant = 'info', duration }: ToastOptions) => {
+    ({ title, description, variant = 'info', duration, action }: ToastOptions) => {
       const id = nextId.current++;
-      setToasts((current) => [...current.slice(-3), { id, title, description, variant }]);
+      setToasts((current) => [...current.slice(-3), { id, title, description, variant, action }]);
       window.setTimeout(() => dismiss(id), duration ?? (variant === 'error' ? 7000 : 4500));
     },
     [dismiss],
@@ -70,6 +73,18 @@ export function ToastProvider({ children, placement = 'bottom-right' }: { childr
                 <p className="text-sm font-medium text-fg">{toast.title}</p>
                 {toast.description && <p className="mt-0.5 text-xs leading-relaxed text-fg-muted">{toast.description}</p>}
               </div>
+              {toast.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.action?.onClick();
+                    dismiss(toast.id);
+                  }}
+                  className="-my-1 rounded-md px-2 py-1 text-xs font-semibold text-accent-hover transition-colors hover:bg-accent-soft"
+                >
+                  {toast.action.label}
+                </button>
+              )}
               <button
                 type="button"
                 aria-label="Dismiss notification"

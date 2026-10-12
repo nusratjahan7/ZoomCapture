@@ -18,13 +18,18 @@ async function createV2Database() {
       database.createObjectStore('recordingChunks', { keyPath: ['draftId', 'trackId', 'seq'] });
     },
   });
-  const timeline = { durationMs: 9000, tracks: [], zoomMarkers: [] };
+  const timeline = {
+    durationMs: 9000,
+    tracks: [],
+    // A v2-era marker shape (start/end/focus), upgraded by the v4 step.
+    zoomMarkers: [{ id: 'zm_old', startMs: 1000, endMs: 4000, scale: 2, focus: { x: 0.25, y: 0.75 }, easing: 'ease-in-out', origin: 'manual' }],
+  };
   await db.put('projects', {
     id: 'prj_v2',
     name: 'Old demo',
     sessionId: 'ses_old',
     timeline,
-    interactions: [],
+    interactions: [{ timeMs: 1500, type: 'click', x: 0.4, y: 0.6 }],
     cameraLayout: { x: 0.8, y: 0.8, size: 'medium' },
     source: { surface: 'browser', label: 'Docs tab' },
     createdAt: 100,
@@ -79,8 +84,30 @@ describe('IndexedDB migrations', () => {
     });
     expect(recording!.id).toMatch(/^rec_/);
 
+    // v4: clicks belong to the original recording; markers use the new model in the project.
+    expect(recording!.interactions).toEqual([
+      { id: expect.stringMatching(/^ev_/), type: 'click', timeMs: 1500, position: { x: 0.4, y: 0.6 }, button: 0, viewport: { width: 0, height: 0 } },
+    ]);
+    expect(recording!.clickTracking.mode).toBe('unsupported');
+
     const project = (await getProject('prj_v2'))!;
-    expect(project).toMatchObject({ recordingId: recording!.id, schemaVersion: 1, subtitles: [], importedAssetIds: [] });
+    expect(project).toMatchObject({ recordingId: recording!.id, schemaVersion: 2, subtitles: [], importedAssetIds: [] });
+    expect('interactions' in project).toBe(false);
+    expect(project.zoom).toMatchObject({ durationMs: 2500, transitionMs: 600 });
+    expect(project.timeline.zoomMarkers).toEqual([
+      expect.objectContaining({
+        id: 'zm_old',
+        timeMs: 1600,
+        durationMs: 1800,
+        transitionMs: 600,
+        position: { x: 0.25, y: 0.75 },
+        scale: 2,
+        positionMode: 'fixed',
+        effect: 'zoom',
+        enabled: true,
+        origin: 'manual',
+      }),
+    ]);
     expect(project.cameraLayout).toEqual({ x: 0.8, y: 0.8, size: 'medium' });
     expect('name' in project).toBe(false);
 

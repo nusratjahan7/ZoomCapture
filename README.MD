@@ -3,7 +3,8 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
-**Status: Module 03 (recording library and local storage) is complete.** Recordings are saved reliably on your device, with save progress, storage-full handling and recovery of interrupted saves. They appear in a library with thumbnails, where you can rename, preview, download or delete them. Everything persists across browser restarts, and nothing is ever uploaded.
+**Status: Module 04 (click tracking and automatic zoom) is complete.** When you record the browser tab you opened ZoomCapture on, your clicks there are tracked, with your knowledge, and turned into editable zoom effects. In the editor you can preview, add, edit, duplicate and delete those effects. Screen and window recordings don't get click tracking, and the app says so.
+Modules 01–03 (foundation, recording engine, recording library and storage) are still in place and tested.
 Module 01 (extension foundation) and Module 02 (recording engine) still work as before.
 
 ---
@@ -44,8 +45,12 @@ While `npm run dev` is running, click the extension's **reload** button on `chro
 | --- | --- |
 | `storage` | Settings (`chrome.storage.local`) and the active recording session (`chrome.storage.session`). |
 | `unlimitedStorage` | Recordings are stored in IndexedDB. Without it, Chrome's per-extension quota can evict or reject long recordings. |
+| `activeTab` | Gives temporary access to **only** the tab you click the ZoomCapture toolbar icon on, and only until you leave that site. It isn't shown as a warning at install. |
+| `tabCapture` | Records exactly that tab without Chrome's picker, so ZoomCapture knows which tab is recorded and can match clicks to it. |
+| `scripting` | Puts the click tracker into that tab (it only works where `activeTab` or a site permission allows it). |
+| `optional_host_permissions` (`http/https`) | **Not granted at install.** Asked for one site at a time, and only if you click "Always allow on <site>" in the studio, so tracking keeps working after leaving and returning to that site. |
 
-Nothing else is requested:
+There are no install-time host permissions and no content scripts registered on pages. Nothing else is requested:
 
 - Screen, window and tab capture use `navigator.mediaDevices.getDisplayMedia()` from an extension page, which needs no manifest permission. Chrome shows its own picker every time.
 - Camera and microphone use `getUserMedia()`. Chrome prompts on the extension's origin the first time.
@@ -141,6 +146,7 @@ Each schema version is one step that is never edited after release. Steps run in
 | v1 | `projects`, `assets`, `assetBlobs` (Module 01) |
 | v2 | `recordingDrafts`, `recordingChunks` (Module 02) |
 | v3 | `recordings` store; each v2 project is split into a `Recording` plus an editable `Project`; assets get `origin` and `recordingId`; new indexes (Module 03) |
+| v4 | Raw clicks move to `Recording.interactions` (original data), and `Recording.clickTracking` is added. Zoom markers move to the new model (time, duration, transition, position mode, annotation, effect, enabled). `Project.schemaVersion` becomes 2 (Module 04) |
 
 A project without playable media is left untouched rather than guessed at. `Project.schemaVersion` versions the project data itself, for future in-record upgrades.
 
@@ -179,21 +185,99 @@ Every write goes through `withTransaction()`, which aborts on any error, includi
 | `tests/unit/migrations.test.ts` | Fresh install schema; upgrading a real v2 database with projects, assets and blobs. |
 | `tests/unit/webmDuration.test.ts` | Inserting or updating Duration, TimecodeScale, sized segments, media data preserved byte for byte, unknown data left untouched. |
 | `tests/unit/storageErrors.test.ts` | Recognising quota errors however they surface; user-facing messages. |
+| `tests/unit/zoomCoordinates.test.ts` | **Coordinate mapping:** normalizing (edges, outside the content, pinch-zoom, different page sizes), mapping to outputs (`contain` letterbox, `cover` crop, `stretch`), keeping the view in frame, transform-origin math. |
+| `tests/unit/clickTracking.test.ts` | Click filtering (synthetic, non-primary, outside, not recording). **Duplicate events** (double-click, re-delivered, quick clicks elsewhere kept). **Timestamp synchronization** across pauses, late arrival, epoch mapping. **Unsupported capture sources** (screen, window, picked tab, disabled, restricted pages). |
+| `tests/unit/zoomMarkers.test.ts` | Generation (one per click, merging held clicks, duplicates, timeline bounds). **Marker editing** (add, edit with clamping, duplicate, delete, regenerate keeps manual, annotations). Zoom state over time (easing, disabled, follow-cursor, highlight). Persistence (clicks on the recording and markers in the project, kept after reopening, failed edit leaves data unchanged). |
+| `tests/e2e/module04.mjs` | In real Chrome: no install-time host access; toolbar click on a demo page → *Record this tab* → on-page notice (hidden while recording) → real clicks normalized correctly, synthetic/right/duplicate clicks ignored, **timeline gap matches the real gap** → automatic markers saved → editor preview zooms at marker time; edit, duplicate, delete with undo, add, all kept after reload with the original clicks unchanged → same-site navigation re-attaches; another site pauses and a toolbar click resumes → screen recording shows the limitation and creates no automatic zoom. |
 | `tests/e2e/run.mjs` | In real Chrome: record, then save with progress and a thumbnail → rename (including validation) → **close and reopen the browser** → library still shows everything → preview (object URL revoked) → download (`E2E demo.webm`) → delete (cancel, then confirm; every row removed) → disk full: error, nothing lost, Retry saving → disk full, quit, reopen, Recover from the library. |
+
+## Click tracking and automatic zoom (Module 04)
+
+### What is tracked, and where
+
+Chrome extensions can't see clicks in other applications or on the desktop, so ZoomCapture **does not claim to track clicks for screen or window recordings**. Tracking depends on the source:
+
+| What you record | Click tracking | Why |
+| --- | --- | --- |
+| **The tab you opened ZoomCapture on** (popup → *Browser Tab* → *Record this tab*) | **Yes** | Clicking the toolbar icon grants `activeTab` for that tab. ZoomCapture captures exactly that tab with `tabCapture` and puts the tracker into it with `scripting`. |
+| A tab chosen in Chrome's picker (*Choose another tab*) | No | The picker doesn't tell an extension which tab was chosen, so clicks can't be matched to the video. |
+| Entire screen, or an application window | No | Content scripts only run inside web pages; clicks elsewhere are invisible to extensions. |
+| Browser pages (`chrome://`, other extensions, the Chrome Web Store) | No | Chrome doesn't let extensions run scripts there. The popup says so. |
+
+**Fallback:** the studio's *Automatic zoom* panel gives the exact reason for every unsupported source. Recordings without tracked clicks get no automatic effects; the editor says so and offers **Add at playhead** to place zoom effects by hand.
+
+**Navigation:** clicks keep being tracked across reloads and pages on the same site; the tracker re-attaches automatically. If the tab moves to **another site**, Chrome ends ZoomCapture's access. The studio shows *Click tracking paused*, with two ways to continue, and neither is asked for up front:
+- **Click the ZoomCapture icon while on that tab.** That grants `activeTab` again; the popup tells the studio, which re-attaches the tracker.
+- **Always allow on <site>** (optional): grants a site permission so future navigations there are tracked without clicking the icon.
+
+### Transparency and privacy
+
+- The tracker records **only** the position (as a fraction of the visible page) and the time of primary-button presses: no page content, element names, text, keystrokes or URLs. (The site's origin is shown in the studio.)
+- While a tracked tab isn't recording, it shows an on-page notice: *ZoomCapture is tracking clicks in this tab for automatic zoom*. The notice hides from the countdown on, so it never appears in the video. The studio shows whether tracking is on, for which site, and a live count of clicks captured.
+- When the session ends (saved, cancelled or tab closed), the tracker removes its listeners and the notice.
+- Settings → *Automatic zoom*: **Track clicks while recording a tab** (on/off) and **Create zoom effects automatically** (on/off; when off, clicks are still kept so effects can be generated later), plus defaults for **zoom level**, **duration** and **transition speed** (slow 900 ms / normal 600 ms / fast 350 ms).
+
+### Pipeline
+
+```
+recorded tab (content/click-tracker.js, injected on demand)
+   pointerdown → { epochMs = performance.timeOrigin + event.timeStamp, clientX/Y, viewport, button, isTrusted }
+        │ chrome.runtime.sendMessage (accepted only from the captured tab and this session)
+        ▼
+Recording Studio → RecordingController.addTrackedClick()
+   RecordingClock.recordedTimeAtEpoch()  → timeline time (pauses excluded; null if paused or not recording)
+   toInteraction()                       → ignored if synthetic, not the primary button, or outside the content
+   isDuplicateClick()                    → ignored if repeated within 400 ms and 2 % (double-click, re-delivery)
+   → RecordingDraft.interactions (saved with each 1 s checkpoint, so a crash keeps the clicks)
+        ▼ finalizeDraft()
+Recording.interactions   (original, never edited)
+Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (editable, separate from the recording)
+```
+
+- **Timestamp synchronization:** each click carries the moment it happened in the page (`performance.timeOrigin + event.timeStamp`), not when the message arrived. `RecordingClock` keeps the history of recording segments, so a click is placed by when it happened, even if its message is processed later or during a pause. Clicks made while paused are ignored. In the end-to-end test, the gap between two clicks on the timeline matched the real gap within 150 ms.
+- **Coordinates:** clicks are normalized to the visible viewport (the area tab capture records), including pinch-zoom offsets, so a marker stays on the same spot at any output size. `mapToOutput()` converts to pixels for any output size (`contain`, `cover` or `stretch`). `clampFocus()` and `zoomTransformOrigin()` keep the zoomed view inside the frame.
+- **Generation:** one zoom effect per eligible click: fully zoomed at the click, held for *duration*, with *transition* easing in and out. A click that lands while the previous effect is still holding extends that effect and switches it to *follow clicks*, so the view pans instead of zooming out and in again. Effects never hold past the end of the recording.
+
+### Zoom marker model (`types/zoom.ts`)
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `zm_…`, unique |
+| `timeMs` | Timeline time at which the effect is fully applied (the click) |
+| `position` | Normalized `{x, y}` (0–1) in the captured content |
+| `scale` | Zoom level (1.1×–4×) |
+| `durationMs` | Hold after `timeMs` (0.3–20 s) |
+| `transitionMs` | Ease-in before and ease-out after the hold (0.1–2 s) |
+| `positionMode` | `fixed` or `follow-cursor` (pans to later clicks inside the effect) |
+| `annotation` | Optional caption, up to 200 characters |
+| `effect` | `zoom` (magnify) or `highlight` (spotlight ring, no magnification) |
+| `enabled` | Disabled effects are kept but not applied |
+| `origin`, `sourceEventIds` | `auto` (from these clicks) or `manual`. Editing an automatic effect makes it `manual`, so regenerating never overwrites your edits |
+
+### Editing (editor workspace)
+
+- **Preview** plays the recording with the effects applied live (zoom transform, highlight ring, annotation). *Preview zoom effects* toggles them for comparison.
+- **Timeline** shows each effect's span, with its hold shaded, a tick for every tracked click, and the playhead. Click an effect to edit it, or click the bar to seek.
+- **Zoom effects** panel: an *enabled* checkbox, plus **Edit**, **Duplicate** and **Delete** (with **Undo**) for each effect, **Add at playhead**, and **Generate from clicks / Regenerate**. Regenerating replaces only unedited automatic effects, after confirmation.
+- **Edit dialog:** time, position (click on the thumbnail or type X/Y %), zoom level, hold, transition, effect, position mode, annotation and enabled. Values are validated and clamped.
+- Every change is saved in one read-modify-write transaction (`updateZoomMarkers`), so edits from two open pages can't overwrite each other.
 
 ## Folder structure
 
 ```
 ZoomCapture/
-├── package.json, tsconfig.json, vite.config.ts, vitest.config.ts, .gitignore
+├── package.json, tsconfig.json, vite.config.ts, vite.content.config.ts, vitest.config.ts, .gitignore
 ├── tests/
-│   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors
-│   └── e2e/{run,lib}.mjs       # Puppeteer + Chrome for Testing against dist/
+│   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors,
+│   │                           # zoomCoordinates, clickTracking, zoomMarkers
+│   └── e2e/{run,lib,module04}.mjs   # Puppeteer + Chrome for Testing against dist/
 ├── public/                     # copied verbatim into dist/
 │   ├── manifest.json           # Manifest V3
 │   └── icons/icon-{16,32,48,128}.png
 ├── scripts/generate-icons.mjs  # dependency-free PNG icon generator
+├── scripts/dev.mjs             # `npm run dev`: watches pages and the content script
 └── src/
+    ├── content/clickTracker.ts # click tracker, injected on demand (built as one IIFE file)
     ├── background/             # service worker
     │   ├── index.ts            # top-level listener registration
     │   ├── router.ts           # typed message router
@@ -201,16 +285,18 @@ ZoomCapture/
     │   └── pages.ts            # open/focus extension pages
     ├── popup/                  # lightweight launcher
     │   ├── Popup.tsx
+    │   ├── useCurrentTabTarget.ts   # the tab the popup was opened on (activeTab)
     │   └── components/{ActiveSessionCard,RecentRecordings}.tsx   # live timer + pause/resume/stop
     ├── recording/              # Recording Studio page
     │   ├── RecordingPage.tsx
     │   ├── components/{SourcePreview,RecordingControls,CameraBubble,FloatingControls,
-    │   │               RecordingResult,SavingProgress,DevicePanels,MicLevelMeter,StreamVideo}.tsx
-    │   └── hooks/{useRecordingFlow,useDisplayCapture,useUserMediaStream,useDocumentPip,useStudioCommands}.ts
+    │   │               RecordingResult,SavingProgress,ClickTrackingPanel,DevicePanels,MicLevelMeter,StreamVideo}.tsx
+    │   └── hooks/{useRecordingFlow,useDisplayCapture,useClickTracking,useUserMediaStream,useDocumentPip,useStudioCommands}.ts
     ├── editor/                 # recording library + recording workspace
     │   ├── EditorPage.tsx      # ?recording=<id> (older ?project=<id> links still work)
-    │   └── components/{RecordingLibrary,RecordingWorkspace,TimelineView,RecoverableRecordings,EditorHeader}.tsx
-    ├── settings/SettingsPage.tsx   # options page
+    │   └── components/{RecordingLibrary,RecordingWorkspace,TimelineView,ZoomPreview,ZoomEffectsPanel,
+    │                       ZoomMarkerDialog,RecoverableRecordings,EditorHeader}.tsx
+    ├── settings/{SettingsPage,AutoZoomSettingsPanel}.tsx   # options page
     ├── shared/
     │   ├── components/         # Button, IconButton, Toggle, Tooltip, Dialog/ConfirmDialog,
     │   │                       # Toast, SegmentedControl, Select, Panel, EmptyState, StatusBadge, Logo,
@@ -222,19 +308,20 @@ ZoomCapture/
     │   └── mountPage.tsx       # root render + providers
     ├── services/
     │   ├── messaging.ts, settings.ts, sessionState.ts, navigation.ts
-    │   ├── media/{displayCapture,userMedia,audioLevel,thumbnail}.ts
+    │   ├── media/{displayCapture,tabCapture,userMedia,audioLevel,thumbnail}.ts
+    │   ├── zoom/               # coordinates, clicks (filter + dedupe), support (per source), markers
     │   ├── recording/          # RecordingController, TrackRecorder, RecordingClock, audioMixer,
     │   │                       # mimeTypes, webmDuration, finalizeRecording
     │   ├── export/             # Exporter interface, original-file exporter, download helper
     │   └── storage/            # db (schema), migrations, recordingRepository, projectRepository,
     │                           # projectDefaults, assetRepository, recordingDraftRepository,
     │                           # libraryEvents, storageStatus
-    ├── types/                  # session, recording (+ drafts), project, settings, messages
+    ├── types/                  # session, recording (+ drafts), project, zoom, settings, messages
     ├── utils/                  # cn, id, format, errors, storageErrors
     └── styles/globals.css      # Tailwind v4 + design tokens
 ```
 
-Build output: `dist/manifest.json`, `dist/background.js`, `dist/{popup,recording,editor,settings}/index.html`, `dist/assets/*`, `dist/icons/*`.
+Build output: `dist/manifest.json`, `dist/background.js`, `dist/content/click-tracker.js`, `dist/{popup,recording,editor,settings}/index.html`, `dist/assets/*`, `dist/icons/*`.
 
 ---
 
@@ -352,3 +439,36 @@ Automated: `npm test` (36 unit tests) and `npm run test:e2e` (9 end-to-end tests
 - [ ] Close Chrome while that error is showing, then reopen it. The popup shows "1 unfinished recording can be recovered", and the library offers **Recover** (with progress) and **Discard** (with confirmation).
 - [ ] Kill the Chrome process during **Saving…**. After reopening, the recording is either in the library or under Unfinished recordings, never half-saved and never lost.
 - [ ] Settings → Storage shows recordings, unfinished drafts, space used and available, and whether persistent storage is on.
+
+---
+
+## Module 04 test checklist
+
+Automated: `npm test` (79 unit tests) and `npm run test:e2e` (14 end-to-end tests). Manual checks on a real device:
+
+**Tracking a tab**
+- [ ] Open a website, click the ZoomCapture icon, choose **Browser Tab**. The popup says "Records this tab and tracks your clicks in it for automatic zoom."
+- [ ] **Start Recording** → **Record this tab**. No sharing picker appears, the page's audio stays audible, and the studio shows "Tracking clicks In <site>".
+- [ ] The page shows the "ZoomCapture is tracking clicks" notice until recording starts, and it isn't in the saved video.
+- [ ] Click several buttons while recording. The studio's click count rises, but not for right-clicks, double-clicks (counted once) or paused time.
+- [ ] Save and open in the editor. A zoom effect appears at each click, at the right time and place in the preview, including after a pause.
+- [ ] Resize the browser window or use page zoom (Ctrl +/-) before recording. Effects still land on the clicked spot.
+
+**Navigation**
+- [ ] Navigate within the same site while recording. Tracking continues on the new page.
+- [ ] Go to another site. The studio shows "Click tracking paused" and explains how to resume. Click the ZoomCapture icon on that tab, and tracking resumes for the new site.
+- [ ] Optional: **Always allow on <site>** asks for that one site only. Afterwards, leaving and returning to it keeps tracking without clicking the icon.
+
+**Unsupported sources (fallback)**
+- [ ] Record the **entire screen**, a **window**, and a tab chosen with **Choose another tab**. The studio says "Clicks are not tracked" with the matching reason. The saved recording has no automatic effects, and the editor says clicks weren't tracked and offers **Add at playhead**.
+- [ ] Open the popup on `chrome://extensions`, choose Browser Tab. It explains that clicks can't be tracked on that page.
+
+**Settings**
+- [ ] Turn **Track clicks** off: no tracker is injected and no notice appears.
+- [ ] Turn **Create zoom effects automatically** off: clicks are still counted and saved, the editor shows **Generate from clicks**, and no effects are created until you click it.
+- [ ] Change the default zoom level, duration and transition speed. New recordings use them, and **Regenerate** uses the recording's own settings.
+
+**Editing**
+- [ ] Edit an effect: time, position (click on the picture), zoom level, hold, transition, Zoom/Highlight, Fixed/Follow clicks, annotation, enabled. The preview reflects each change after saving.
+- [ ] **Duplicate**, **Delete** (then **Undo**), **Add at playhead**, and toggle **enabled**. Reload: everything is kept.
+- [ ] **Regenerate** after editing one effect: the edited and manual effects are kept, only untouched automatic ones are recreated.

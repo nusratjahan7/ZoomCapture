@@ -3,7 +3,7 @@
  *
  * - `Recording` (types/recording.ts) is what was captured: its name, its original media and facts
  *   about it. The original media is never modified after saving.
- * - `Project` is the editable layer on top of one recording: timeline, zoom effects, camera
+ * - `Project` is the editable layer on top of one recording: timeline, zoom markers, camera
  *   placement, subtitles, music, imported assets and export settings. Editing never touches the
  *   original recording, so a project can always be reset.
  * - `MediaAsset` describes one stored Blob (the bytes live in the `assetBlobs` store).
@@ -11,6 +11,7 @@
  * All times are in milliseconds relative to the start of the timeline.
  */
 import type { SelectedSurface } from './session';
+import type { ZoomMarker, ZoomSettings } from './zoom';
 
 export type MediaAssetKind =
   | 'screen'
@@ -62,38 +63,6 @@ export interface CameraLayout {
   size: CameraBubbleSize;
 }
 
-export type ZoomEasing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'spring';
-
-/** A zoom effect applied over a time range of the timeline. */
-export interface ZoomMarker {
-  id: string;
-  startMs: number;
-  endMs: number;
-  /** Scale factor (1 = no zoom). */
-  scale: number;
-  /** Focus point in normalised (0-1) coordinates of the source frame. */
-  focus: { x: number; y: number };
-  easing: ZoomEasing;
-  /** `auto` markers are generated from captured interaction events; `manual` are user-authored. */
-  origin: 'auto' | 'manual';
-}
-
-/** Project-wide zoom behaviour. Individual effects are `Timeline.zoomMarkers`. */
-export interface ZoomSettings {
-  mode: 'auto' | 'manual' | 'off';
-  defaultScale: number;
-  easing: ZoomEasing;
-}
-
-/** A captured interaction used to generate automatic zoom markers. */
-export interface InteractionEvent {
-  timeMs: number;
-  type: 'click' | 'keypress' | 'scroll' | 'cursor';
-  /** Normalised (0-1) position in the source frame. */
-  x: number;
-  y: number;
-}
-
 /** `music` tracks hold imported audio assets. */
 export type TrackKind = 'video' | 'camera' | 'audio' | 'music';
 
@@ -122,6 +91,7 @@ export interface TimelineTrack {
 export interface Timeline {
   durationMs: number;
   tracks: TimelineTrack[];
+  /** Zoom effects: editable, stored with the project, never in the original recording. */
   zoomMarkers: ZoomMarker[];
 }
 
@@ -152,7 +122,7 @@ export interface ExportSettings {
 }
 
 /** Bump when the Project shape changes; `services/storage/migrations.ts` upgrades older data. */
-export const PROJECT_SCHEMA_VERSION = 1;
+export const PROJECT_SCHEMA_VERSION = 2;
 
 export interface Project {
   id: string;
@@ -161,7 +131,6 @@ export interface Project {
   schemaVersion: number;
   timeline: Timeline;
   zoom: ZoomSettings;
-  interactions: InteractionEvent[];
   cameraLayout?: CameraLayout;
   subtitles: SubtitleTrack[];
   /** Assets the user imported into this project (images, music, video); `MediaAsset.projectId` = this id. */

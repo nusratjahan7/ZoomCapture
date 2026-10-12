@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ZoomCapture",
   "short_name": "ZoomCapture",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Professional screen recorder with automatic zoom effects.",
   "minimum_chrome_version": "120",
   "icons": {
@@ -31,6 +31,13 @@
   },
   "permissions": [
     "storage",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "activeTab",
+    "scripting",
+    "tabCapture"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
   ]
 }

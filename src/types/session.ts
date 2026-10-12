@@ -30,10 +30,22 @@ export const SESSION_TRANSITIONS: Record<SessionStatus, readonly SessionStatus[]
 
 export const TERMINAL_SESSION_STATUSES: readonly SessionStatus[] = ['completed', 'cancelled', 'error'];
 
+/**
+ * The tab ZoomCapture was opened on (the user clicked the toolbar icon there, which grants
+ * `activeTab`). Only this tab can be captured with click tracking.
+ */
+export interface CaptureTarget {
+  tabId: number;
+  title: string;
+  origin: string;
+}
+
 export interface CaptureOptions {
   source: CaptureSource;
   camera: boolean;
   microphone: boolean;
+  /** Present when the popup was opened on a page that can be captured with click tracking. */
+  target?: CaptureTarget;
 }
 
 /** Description of the surface actually granted by the user in Chrome's picker. */
