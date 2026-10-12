@@ -15,6 +15,7 @@ type UpgradeTransaction = IDBPTransaction<ZoomCaptureDB, StoreNames<ZoomCaptureD
  * v2: recordingDrafts, recordingChunks             (Module 02)
  * v3: recordings split from editable projects      (Module 03)
  * v4: click interactions on recordings, new zoom marker model (Module 04)
+ * v5: typed timeline clips (media / text), project aspect ratio (Module 06)
  */
 export async function runMigrations(
   db: IDBPDatabase<ZoomCaptureDB>,
@@ -38,6 +39,9 @@ export async function runMigrations(
   if (oldVersion < 4) {
     await migrateToV4(transaction);
   }
+  if (oldVersion < 5) {
+    await migrateToV5(transaction);
+  }
 }
 
 /** Shape of a v2 project, which mixed recording facts with editable data. */
@@ -59,11 +63,39 @@ interface ZoomMarkerV3 {
   origin: 'auto' | 'manual';
 }
 
-type TimelineV3 = Omit<Project['timeline'], 'zoomMarkers'> & { zoomMarkers: ZoomMarkerV3[] };
+/** Timeline clip and track shapes before v5 (media only, no `type`). */
+interface ClipV4 {
+  id: string;
+  assetId: string;
+  startMs: number;
+  sourceInMs: number;
+  sourceOutMs: number;
+  muted?: boolean;
+  volume?: number;
+}
+interface TrackV4 {
+  id: string;
+  kind: 'video' | 'camera' | 'audio' | 'music';
+  name: string;
+  clips: ClipV4[];
+  locked?: boolean;
+  hidden?: boolean;
+}
+interface TimelineV4 {
+  durationMs: number;
+  tracks: TrackV4[];
+  zoomMarkers: ZoomMarker[];
+}
+/** Project as written by the v4 step. */
+interface ProjectV4 extends Omit<Project, 'timeline' | 'aspectRatio'> {
+  timeline: TimelineV4;
+}
+
+type TimelineV3 = Omit<TimelineV4, 'zoomMarkers'> & { zoomMarkers: ZoomMarkerV3[] };
 
 /** Recording and project as written by the v3 step. */
 type RecordingV3 = Omit<Recording, 'interactions' | 'clickTracking'>;
-interface ProjectV3 extends Omit<Project, 'timeline' | 'zoom'> {
+interface ProjectV3 extends Omit<ProjectV4, 'timeline' | 'zoom'> {
   timeline: TimelineV3;
   zoom: { mode: Project['zoom']['mode']; defaultScale: number; easing: Project['zoom']['easing'] };
   interactions?: InteractionV3[];
@@ -152,13 +184,13 @@ async function migrateToV4(transaction: UpgradeTransaction): Promise<void> {
   for (const raw of (await projects.getAll()) as unknown as ProjectV3[]) {
     if (!raw.recordingId) continue; // pre-v3 project without media, deliberately left untouched
     const { interactions = [], ...rest } = raw;
-    const project: Project = {
+    const project: ProjectV4 = {
       ...rest,
       schemaVersion: 2,
       zoom: { ...defaultZoomSettings(), ...raw.zoom },
       timeline: { ...raw.timeline, zoomMarkers: raw.timeline.zoomMarkers.map((marker) => upgradeMarker(marker, raw.updatedAt)) },
     };
-    await projects.put(project);
+    await projects.put(project as unknown as Project);
 
     const recording = (await recordings.get(raw.recordingId)) as RecordingV3 | Recording | undefined;
     if (recording && !('interactions' in recording)) {
@@ -201,4 +233,28 @@ function upgradeInteractions(old: InteractionV3[]): InteractionEvent[] {
       button: 0,
       viewport: { width: 0, height: 0 },
     }));
+}
+
+/** v5: every timeline clip gets a `type` (text clips are new); projects get an aspect ratio. */
+async function migrateToV5(transaction: UpgradeTransaction): Promise<void> {
+  const projects = transaction.objectStore('projects');
+  for (const raw of (await projects.getAll()) as unknown as ProjectV4[]) {
+    if (!raw.recordingId || !raw.timeline) continue; // pre-v3 data without media, left untouched
+    await projects.put(upgradeProjectToV5(raw));
+  }
+}
+
+export function upgradeProjectToV5(old: ProjectV4): Project {
+  return {
+    ...old,
+    schemaVersion: 3,
+    aspectRatio: 'source',
+    timeline: {
+      ...old.timeline,
+      tracks: old.timeline.tracks.map((track) => ({
+        ...track,
+        clips: [...track.clips].sort((a, b) => a.startMs - b.startMs).map((clip) => ({ ...clip, type: 'media' as const })),
+      })),
+    },
+  };
 }

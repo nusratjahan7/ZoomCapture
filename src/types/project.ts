@@ -11,7 +11,7 @@
  * All times are in milliseconds relative to the start of the timeline.
  */
 import type { SelectedSurface } from './session';
-import type { RenderEffects, ZoomMarker, ZoomSettings } from './zoom';
+import type { NormalizedPoint, RenderEffects, ZoomMarker, ZoomSettings } from './zoom';
 
 export type MediaAssetKind =
   | 'screen'
@@ -63,15 +63,30 @@ export interface CameraLayout {
   size: CameraBubbleSize;
 }
 
-/** `music` tracks hold imported audio assets. */
-export type TrackKind = 'video' | 'camera' | 'audio' | 'music';
+/**
+ * Timeline model. One time unit everywhere: integer milliseconds.
+ *
+ * - Timeline positions (`startMs`) say where an item plays in the edited video.
+ * - Source times (`sourceInMs`/`sourceOutMs`) say which part of the asset it shows. They are kept
+ *   separate, so moving a clip changes only `startMs` and trimming changes both consistently.
+ * - Layer order is the order of `Timeline.tracks`: the first track is drawn on top.
+ */
 
-export interface TimelineClip {
+/**
+ * `video`: screen recording, imported video and images (zoom effects apply to these layers).
+ * `camera`: the camera bubble. `audio`: recorded audio stems. `music`: imported audio.
+ * `text`: text annotations.
+ */
+export type TrackKind = 'video' | 'camera' | 'audio' | 'music' | 'text';
+
+/** A section of a media asset placed on the timeline. Its duration is `sourceOutMs − sourceInMs`. */
+export interface MediaClip {
   id: string;
+  type: 'media';
   assetId: string;
   /** Position of the clip on the timeline. */
   startMs: number;
-  /** Trim window within the source asset. */
+  /** Trim window within the source asset (source time, independent of the timeline position). */
   sourceInMs: number;
   sourceOutMs: number;
   muted?: boolean;
@@ -79,17 +94,47 @@ export interface TimelineClip {
   volume?: number;
 }
 
+export type TextSize = 'small' | 'medium' | 'large';
+
+export interface TextStyle {
+  size: TextSize;
+  /** CSS colour of the text. */
+  color: string;
+  /** Draw a dark box behind the text for legibility. */
+  background: boolean;
+}
+
+/** A text annotation shown over the video. */
+export interface TextClip {
+  id: string;
+  type: 'text';
+  startMs: number;
+  durationMs: number;
+  text: string;
+  /** Centre of the text, normalised to the output frame. */
+  position: NormalizedPoint;
+  style: TextStyle;
+}
+
+export type TimelineClip = MediaClip | TextClip;
+
 export interface TimelineTrack {
   id: string;
   kind: TrackKind;
   name: string;
+  /** Sorted by `startMs`; clips on one track never overlap. */
   clips: TimelineClip[];
   locked?: boolean;
+  /** Hidden visual tracks are not drawn. */
   hidden?: boolean;
+  /** Muted tracks are silent. */
+  muted?: boolean;
 }
 
 export interface Timeline {
+  /** End of the last clip. */
   durationMs: number;
+  /** Top layer first. */
   tracks: TimelineTrack[];
   /** Zoom effects: editable, stored with the project, never in the original recording. */
   zoomMarkers: ZoomMarker[];
@@ -121,8 +166,11 @@ export interface ExportSettings {
   burnInSubtitles: boolean;
 }
 
+/** Shape of the rendered video. `source` keeps the recording's own shape. */
+export type AspectRatio = 'source' | '16:9' | '9:16' | '1:1' | '4:3';
+
 /** Bump when the Project shape changes; `services/storage/migrations.ts` upgrades older data. */
-export const PROJECT_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 3;
 
 export interface Project {
   id: string;
@@ -132,6 +180,7 @@ export interface Project {
   timeline: Timeline;
   zoom: ZoomSettings;
   cameraLayout?: CameraLayout;
+  aspectRatio: AspectRatio;
   /** Cursor and click overlays; absent in older projects (see `renderEffectsOf`). */
   renderEffects?: RenderEffects;
   subtitles: SubtitleTrack[];

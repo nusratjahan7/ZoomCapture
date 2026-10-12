@@ -4,7 +4,7 @@ import { runMigrations } from './migrations';
 
 export const DB_NAME = 'zoomcapture';
 /** Bump together with a new step in `migrations.ts`. */
-export const DB_VERSION = 4;
+export const DB_VERSION = 5;
 
 /**
  * Local storage for recordings. Small records (recordings, projects, asset metadata, drafts)

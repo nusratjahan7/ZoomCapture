@@ -208,6 +208,7 @@ function buildTimeline(assets: MediaAsset[]): TimelineTrack[] {
         clips: [
           {
             id: createId('clp'),
+            type: 'media' as const,
             assetId: asset.id,
             startMs: asset.startOffsetMs,
             sourceInMs: 0,
