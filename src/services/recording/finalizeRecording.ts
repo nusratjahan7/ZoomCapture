@@ -1,5 +1,7 @@
 import { getDb, withTransaction } from '@/services/storage/db';
-import { newProject } from '@/services/storage/projectDefaults';
+import { newProject, zoomSettingsFrom } from '@/services/storage/projectDefaults';
+import { dedupeInteractions } from '@/services/zoom/clicks';
+import { generateZoomMarkers } from '@/services/zoom/markers';
 import { getDraft, readTrackBlob, saveDraft, trackChunkRange } from '@/services/storage/recordingDraftRepository';
 import type {
   DraftTrack,
@@ -138,11 +140,17 @@ async function commitRecording(draft: RecordingDraft): Promise<FinalizeResult> {
       source: draft.source,
       screenAssetId: screen.id,
       assetIds: assets.map((asset) => asset.id),
+      interactions: dedupeInteractions(draft.interactions ?? []),
+      clickTracking: draft.clickTracking ?? { mode: 'unsupported', reason: 'Click tracking was not available for this recording.' },
       createdAt: draft.createdAt,
       updatedAt: now,
-      };
+    };
     const project = newProject(draft.projectId!, recording.id, now);
-    project.timeline = { durationMs: recording.durationMs, tracks: buildTimeline(assets), zoomMarkers: [] };
+    if (draft.autoZoom) project.zoom = zoomSettingsFrom(draft.autoZoom, recording.clickTracking.mode === 'tab');
+    // Zoom markers live in the editable project, generated from (but independent of) the clicks.
+    const zoomMarkers =
+      project.zoom.mode === 'auto' ? generateZoomMarkers(recording.interactions, project.zoom, recording.durationMs, now) : [];
+    project.timeline = { durationMs: recording.durationMs, tracks: buildTimeline(assets), zoomMarkers };
     project.cameraLayout = assets.some((asset) => asset.kind === 'camera') ? draft.cameraLayout : undefined;
 
     // `add` (not `put`): an id collision fails loudly instead of overwriting another recording.

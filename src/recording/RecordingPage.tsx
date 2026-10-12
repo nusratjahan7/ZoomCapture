@@ -23,18 +23,21 @@ import {
 import { useActiveSession } from '@/shared/hooks/useActiveSession';
 import { useMediaDevices } from '@/shared/hooks/useMediaDevices';
 import { useSettings } from '@/shared/hooks/useSettings';
-import type { CameraLayout, CaptureOptions, RecordingTrackKind, SelectedSurface } from '@/types';
+import type { TrackedClick } from '@/services/zoom/clicks';
+import type { CameraLayout, CaptureOptions, ClickTrackingInfo, RecordingTrackKind, SelectedSurface } from '@/types';
 import { getErrorMessage, isPickerDismissed } from '@/utils/errors';
 import { CameraBubble } from './components/CameraBubble';
 import { DevicePanel } from './components/DevicePanels';
 import { FLOATING_SIZE, FloatingControls } from './components/FloatingControls';
 import { RecordingControls } from './components/RecordingControls';
+import { ClickTrackingPanel } from './components/ClickTrackingPanel';
 import { RecordingResult } from './components/RecordingResult';
 import { SavingProgress } from './components/SavingProgress';
 import { SourcePreview } from './components/SourcePreview';
 import { useDisplayCapture } from './hooks/useDisplayCapture';
 import { useDocumentPip } from './hooks/useDocumentPip';
 import { ACTIVE_PHASES, useRecordingFlow, type FlowPhase } from './hooks/useRecordingFlow';
+import { useClickTracking } from './hooks/useClickTracking';
 import { useStudioCommands } from './hooks/useStudioCommands';
 import { useUserMediaStream } from './hooks/useUserMediaStream';
 
@@ -103,6 +106,29 @@ export function RecordingPage() {
     'microphone',
   );
 
+  // Click tracking and the recording flow feed each other: the tracker needs to know when
+  // recording is active, the flow receives clicks. A ref and a state value break the cycle.
+  const addTrackedClickRef = useRef<(click: TrackedClick) => void>(() => undefined);
+  const [trackerRecording, setTrackerRecording] = useState(false);
+  const tracking = useClickTracking({
+    sessionId,
+    enabled: settings?.autoZoom.trackClicks ?? false,
+    surface: display.surface,
+    target: display.target,
+    recording: trackerRecording,
+    onClick: (click) => addTrackedClickRef.current(click),
+  });
+  const trackingStatus = tracking.status;
+  const clickTracking = useMemo<ClickTrackingInfo>(() => {
+    if (trackingStatus.state === 'unsupported') return { mode: 'unsupported', reason: trackingStatus.reason };
+    return {
+      mode: 'tab',
+      tabTitle: display.target?.title,
+      origin: display.target?.origin,
+      reason: 'reason' in trackingStatus ? trackingStatus.reason : undefined,
+    };
+  }, [trackingStatus, display.target]);
+
   const flow = useRecordingFlow(
     {
       sessionId,
@@ -111,6 +137,7 @@ export function RecordingPage() {
       camera: camera.stream,
       microphone: microphone.stream,
       settings,
+      clickTracking,
     },
     {
       onTrackEnded: (kind) => toast.show({ variant: kind === 'screen' ? 'info' : 'error', ...TRACK_ENDED_MESSAGES[kind] }),
@@ -124,8 +151,12 @@ export function RecordingPage() {
     },
   );
   phaseRef.current = flow.phase;
+  addTrackedClickRef.current = flow.addTrackedClick;
   const active = ACTIVE_PHASES.includes(flow.phase);
   const recording = flow.phase === 'recording' || flow.phase === 'paused';
+  // The tracker's on-page notice hides from the countdown on, so it never appears in the video.
+  const trackerActive = recording || flow.phase === 'countdown' || flow.phase === 'starting';
+  useEffect(() => setTrackerRecording(trackerActive), [trackerActive]);
   useStudioCommands(sessionId, flow.command);
 
   // Device names become available once access is granted; refresh the lists when streams start.
@@ -159,11 +190,12 @@ export function RecordingPage() {
     void sendMessage('session/set-options', { sessionId, options }).catch(reportError('Could not update the session'));
   };
 
-  const selectSource = async () => {
+  const selectSource = async (useTarget = false) => {
     if (!session || !settings) return;
     setSelecting(true);
     try {
-      await display.select(session.options.source, settings);
+      if (useTarget && session.options.target) await display.selectTarget(session.options.target, settings);
+      else await display.select(session.options.source, settings);
     } catch (error) {
       if (isPickerDismissed(error)) {
         toast.show({ title: 'Sharing was cancelled', description: 'Choose a source whenever you are ready.' });
@@ -270,7 +302,11 @@ export function RecordingPage() {
         <EmptyState
           icon={TriangleAlert}
           title={flow.failure?.storageFull ? 'Not enough storage to save the recording' : 'The recording could not be saved'}
-          description={`${flow.failure?.message ?? 'Unknown error.'} Your captured media is kept safely until it is saved or you discard it in the library.`}
+          description={
+            flow.failure?.draftId
+              ? `${flow.failure.message} Your captured media is kept safely until it is saved or you discard it in the library.`
+              : (flow.failure?.message ?? 'Unknown error.')
+          }
           action={
             <div className="flex flex-wrap justify-center gap-2">
               <Button icon={FolderOpen} onClick={() => void sendMessage('page/open', { page: 'editor' })}>
@@ -320,7 +356,9 @@ export function RecordingPage() {
             selecting={selecting}
             disabled={!settings}
             recording={recording}
+            target={session.options.source === 'tab' ? (session.options.target ?? null) : null}
             onSelect={() => void selectSource()}
+            onSelectTarget={() => void selectSource(true)}
             overlay={
               <>
                 {camera.stream && bubbleLayout && (
@@ -386,6 +424,13 @@ export function RecordingPage() {
               disabled={active || !settings}
             />
           </Panel>
+          <ClickTrackingPanel
+            status={tracking.status}
+            clicks={flow.clickCount}
+            recording={recording}
+            autoZoomEnabled={settings?.autoZoom.enabled ?? false}
+            onAllowOnSite={tracking.allowOnSite}
+          />
           <DevicePanel
             kind="camera"
             enabled={session.options.camera}

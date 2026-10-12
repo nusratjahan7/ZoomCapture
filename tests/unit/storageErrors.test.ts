@@ -23,5 +23,8 @@ describe('storage error handling', () => {
     expect(full).toMatch(/Nothing was deleted/);
     expect(describeStorageError(new Error('boom'))).toMatch(/boom.*Nothing was deleted; you can retry/);
     expect(describeStorageError(new DOMException('newer', 'VersionError'))).toMatch(/Reload this page/);
+    const nothing = Object.assign(new Error('x'), { name: 'NothingRecordedError' });
+    expect(describeStorageError(nothing)).toMatch(/nothing to save/);
+    expect(describeStorageError(nothing)).not.toMatch(/retry/i);
   });
 });

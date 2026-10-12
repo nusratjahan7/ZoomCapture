@@ -17,16 +17,29 @@ import { downloadBlob } from '@/services/export/download';
 import { assetFileName } from '@/services/export/exporters';
 import { describeMimeType } from '@/services/recording/mimeTypes';
 import { getAssetBlob } from '@/services/storage/assetRepository';
-import { subscribeLibrary } from '@/services/storage/libraryEvents';
+import { notifyLibraryChanged, subscribeLibrary } from '@/services/storage/libraryEvents';
 import { getRecordingDetails, type RecordingDetails } from '@/services/storage/recordingRepository';
-import { Button, buttonClassName, EmptyState, IconButton, Panel, useToast } from '@/shared/components';
+import { Button, buttonClassName, ConfirmDialog, EmptyState, IconButton, Panel, useToast, type ToastOptions } from '@/shared/components';
+import { updateZoomMarkers } from '@/services/storage/projectRepository';
+import {
+  createMarker,
+  deleteMarker,
+  duplicateMarker,
+  regenerateAutoMarkers,
+  sortMarkers,
+  updateMarker,
+  type MarkerPatch,
+} from '@/services/zoom/markers';
 import { useAssetUrl } from '@/shared/hooks/useAssetUrl';
 import { useRecordingActions } from '@/shared/hooks/useRecordingActions';
-import { CAMERA_BUBBLE_SCALE, type MediaAsset, type MediaAssetKind } from '@/types';
+import type { MediaAsset, MediaAssetKind, ZoomMarker } from '@/types';
 import { formatBytes, formatDuration } from '@/utils/format';
 import { describeStorageError } from '@/utils/storageErrors';
 import { EditorHeader } from './EditorHeader';
 import { TimelineView } from './TimelineView';
+import { ZoomEffectsPanel } from './ZoomEffectsPanel';
+import { ZoomMarkerDialog } from './ZoomMarkerDialog';
+import { useVideoTime, ZoomPreview } from './ZoomPreview';
 
 type LoadState =
   | { status: 'loading' }
@@ -140,16 +153,107 @@ export function RecordingWorkspace({ recordingId }: { recordingId: string }) {
 }
 
 function Workspace({ details }: { details: RecordingDetails }) {
-  const { recording, project, assets } = details;
+  const { recording, assets } = details;
   const toast = useToast();
   const actions = useRecordingActions({ onDeleted: () => window.location.replace('index.html') });
   const cameraAsset = assets.find((asset) => asset.kind === 'camera' && asset.origin === 'recording');
   const { url: videoUrl } = useAssetUrl(recording.screenAssetId);
-  const { url: cameraUrl } = useAssetUrl(project.cameraLayout ? cameraAsset?.id : undefined);
+  const { url: cameraUrl } = useAssetUrl(details.project.cameraLayout ? cameraAsset?.id : undefined);
   const mainRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
   const [downloading, setDownloading] = useState(false);
   useFollowerSync(mainRef, cameraRef, cameraAsset?.startOffsetMs ?? 0, Boolean(videoUrl && cameraUrl));
+  const { url: thumbnailUrl } = useAssetUrl(recording.thumbnailAssetId);
+  const { ms: playheadMs } = useVideoTime(mainRef, Boolean(videoUrl));
+
+  // Zoom markers are edited optimistically against the stored project (one transaction per edit).
+  const [project, setProject] = useState(details.project);
+  useEffect(() => setProject(details.project), [details.project]);
+  const markers = project.timeline.zoomMarkers;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<ZoomMarker | null>(null);
+  const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [previewZoom, setPreviewZoom] = useState(true);
+  const durationMs = recording.durationMs;
+  const aspectRatio = recording.width && recording.height ? recording.width / recording.height : 16 / 9;
+
+  const changeMarkers = async (change: (current: ZoomMarker[]) => ZoomMarker[], success?: ToastOptions) => {
+    setBusy(true);
+    try {
+      const updated = await updateZoomMarkers(project.id, (current) => change(current));
+      setProject(updated);
+      notifyLibraryChanged({ type: 'project', recordingId: recording.id });
+      if (success) toast.show(success);
+      return updated;
+    } catch (error) {
+      toast.show({ variant: 'error', title: 'Could not save the zoom effect', description: describeStorageError(error) });
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const seekTo = (ms: number) => {
+    const video = mainRef.current;
+    if (video) video.currentTime = Math.max(0, Math.min(durationMs, ms)) / 1000;
+  };
+
+  const selectMarker = (marker: ZoomMarker) => {
+    setSelectedId(marker.id);
+    seekTo(marker.timeMs);
+  };
+
+  const addAtPlayhead = async () => {
+    const created = createMarker({ timeMs: (mainRef.current?.currentTime ?? 0) * 1000 }, project.zoom, durationMs);
+    const updated = await changeMarkers((current) => sortMarkers([...current, created]), { variant: 'success', title: 'Zoom effect added' });
+    if (updated) {
+      setSelectedId(created.id);
+      setEditing(created);
+    }
+  };
+
+  const saveMarker = async (id: string, patch: MarkerPatch) => {
+    const updated = await changeMarkers((current) => updateMarker(current, id, patch, durationMs), {
+      variant: 'success',
+      title: 'Zoom effect saved',
+    });
+    if (!updated) throw new Error('not saved');
+  };
+
+  const duplicate = async (marker: ZoomMarker) => {
+    let copyId = '';
+    await changeMarkers(
+      (current) => {
+        const result = duplicateMarker(current, marker.id, durationMs);
+        copyId = result.copy.id;
+        return result.markers;
+      },
+      { variant: 'success', title: 'Zoom effect duplicated' },
+    );
+    if (copyId) setSelectedId(copyId);
+  };
+
+  const remove = async (marker: ZoomMarker) => {
+    const removed = await changeMarkers((current) => deleteMarker(current, marker.id));
+    if (!removed) return;
+    if (selectedId === marker.id) setSelectedId(null);
+    toast.show({
+      title: 'Zoom effect deleted',
+      action: {
+        label: 'Undo',
+        onClick: () => void changeMarkers((current) => sortMarkers([...deleteMarker(current, marker.id), marker])),
+      },
+    });
+  };
+
+  const regenerate = async () => {
+    await changeMarkers((current) => regenerateAutoMarkers(current, recording.interactions, project.zoom, durationMs), {
+      variant: 'success',
+      title: 'Zoom effects generated from clicks',
+      description: 'Effects you added or edited were kept.',
+    });
+  };
 
   useEffect(() => {
     document.title = `${recording.name} · ZoomCapture`;
@@ -172,11 +276,10 @@ function Workspace({ details }: { details: RecordingDetails }) {
     ['Format', describeMimeType(recording.mimeType)],
     ['Resolution', recording.width && recording.height ? `${recording.width}×${recording.height}` : '—'],
     ['Source', recording.source?.label ?? '—'],
-    ['Zoom markers', String(project.timeline.zoomMarkers.length)],
+    ['Click tracking', recording.clickTracking.mode === 'tab' ? `${recording.interactions.length} clicks` : 'Not available'],
   ];
 
   const layout = project.cameraLayout;
-  const bubbleWidth = layout ? CAMERA_BUBBLE_SCALE[layout.size] * 100 : 0;
   const mediaFiles = assets.filter((asset) => asset.kind !== 'thumbnail');
 
   return (
@@ -204,31 +307,52 @@ function Workspace({ details }: { details: RecordingDetails }) {
             <IconButton icon={Trash2} label="Delete recording" size="sm" tone="danger" onClick={() => actions.remove(recording)} />
           </div>
           <Panel className="p-3">
-            <div className="relative aspect-video overflow-hidden rounded-xl border border-line bg-black">
-              {videoUrl ? (
-                <>
-                  <video ref={mainRef} src={videoUrl} controls className="h-full w-full" aria-label={`${recording.name} recording`} />
-                  {cameraUrl && layout && (
-                    // Preview of the camera placement; final compositing happens at export.
-                    <video
-                      ref={cameraRef}
-                      src={cameraUrl}
-                      muted
-                      playsInline
-                      aria-hidden
-                      className="pointer-events-none absolute aspect-square -translate-x-1/2 -translate-y-1/2 -scale-x-100 rounded-full border-2 border-white/80 object-cover"
-                      style={{ left: `${layout.x * 100}%`, top: `${layout.y * 100}%`, width: `${bubbleWidth}%` }}
-                    />
-                  )}
-                </>
-              ) : (
-                <div className="flex h-full items-center justify-center">
-                  <Loader2 size={24} aria-label="Loading video" className="animate-spin text-fg-subtle" />
-                </div>
-              )}
-            </div>
+            <ZoomPreview
+              videoUrl={videoUrl}
+              cameraUrl={cameraUrl}
+              cameraLayout={layout}
+              aspectRatio={aspectRatio}
+              markers={markers}
+              interactions={recording.interactions}
+              selectedMarker={markers.find((marker) => marker.id === selectedId) ?? null}
+              previewZoom={previewZoom}
+              onPreviewZoomChange={setPreviewZoom}
+              videoRef={mainRef}
+              cameraRef={cameraRef}
+              label={`${recording.name} recording`}
+            />
           </Panel>
-          <TimelineView timeline={project.timeline} />
+          <TimelineView
+            timeline={project.timeline}
+            interactions={recording.interactions}
+            currentMs={playheadMs}
+            selectedMarkerId={selectedId}
+            onSeek={seekTo}
+            onMarkerSelect={(id) => {
+              const marker = markers.find((candidate) => candidate.id === id);
+              if (marker) {
+                selectMarker(marker);
+                setEditing(marker);
+              }
+            }}
+          />
+          <ZoomEffectsPanel
+            markers={markers}
+            clicks={recording.interactions.length}
+            clickTracking={recording.clickTracking}
+            selectedId={selectedId}
+            busy={busy}
+            onAdd={() => void addAtPlayhead()}
+            onEdit={(marker) => {
+              selectMarker(marker);
+              setEditing(marker);
+            }}
+            onDuplicate={(marker) => void duplicate(marker)}
+            onDelete={(marker) => void remove(marker)}
+            onToggle={(marker, enabled) => void changeMarkers((current) => updateMarker(current, marker.id, { enabled }, durationMs))}
+            onRegenerate={() => setConfirmRegenerate(true)}
+            onSelect={selectMarker}
+          />
         </div>
 
         <div className="space-y-4">
@@ -276,6 +400,22 @@ function Workspace({ details }: { details: RecordingDetails }) {
         </div>
       </main>
       {actions.dialogs}
+      <ZoomMarkerDialog
+        marker={editing}
+        durationMs={durationMs}
+        thumbnailUrl={thumbnailUrl}
+        aspectRatio={aspectRatio}
+        onClose={() => setEditing(null)}
+        onSave={saveMarker}
+      />
+      <ConfirmDialog
+        open={confirmRegenerate}
+        onClose={() => setConfirmRegenerate(false)}
+        onConfirm={regenerate}
+        title="Generate zoom effects from clicks?"
+        description={`Automatic effects are recreated from the ${recording.interactions.length} tracked clicks using this project's zoom defaults. Effects you added or edited are kept.`}
+        confirmLabel="Generate effects"
+      />
     </div>
   );
 }

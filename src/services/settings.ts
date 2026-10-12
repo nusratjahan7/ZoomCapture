@@ -3,7 +3,8 @@ import { DEFAULT_SETTINGS, type UserSettings } from '@/types';
 const SETTINGS_KEY = 'settings';
 
 function withDefaults(stored: Partial<UserSettings> | undefined): UserSettings {
-  return { ...DEFAULT_SETTINGS, ...stored };
+  // Nested groups merge key by key, so settings added in an update get their defaults.
+  return { ...DEFAULT_SETTINGS, ...stored, autoZoom: { ...DEFAULT_SETTINGS.autoZoom, ...stored?.autoZoom } };
 }
 
 export async function getSettings(): Promise<UserSettings> {

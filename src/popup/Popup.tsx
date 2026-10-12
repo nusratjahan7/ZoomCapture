@@ -8,6 +8,7 @@ import { useSettings } from '@/shared/hooks/useSettings';
 import { getErrorMessage } from '@/utils/errors';
 import { ActiveSessionCard } from './components/ActiveSessionCard';
 import { RecentRecordings } from './components/RecentRecordings';
+import { useCurrentTabTarget } from './useCurrentTabTarget';
 
 /**
  * Lightweight launcher. All capture work happens in the Recording Studio page, because the
@@ -18,6 +19,9 @@ export function Popup() {
   const { session, loaded: sessionLoaded } = useActiveSession();
   const toast = useToast();
   const [starting, setStarting] = useState(false);
+  const { target } = useCurrentTabTarget();
+  const source = settings?.defaultSource ?? 'screen';
+  const trackClicks = settings?.autoZoom.trackClicks ?? false;
 
   const openSettings = async () => {
     await chrome.runtime.openOptionsPage();
@@ -33,6 +37,7 @@ export function Popup() {
           source: settings.defaultSource,
           camera: settings.cameraEnabled,
           microphone: settings.microphoneEnabled,
+          target: target ?? undefined,
         },
       });
       window.close();
@@ -102,8 +107,12 @@ export function Popup() {
               {!starting && <span aria-hidden className="size-2.5 rounded-full bg-white" />}
               Start Recording
             </Button>
-            <p className="text-center text-[11px] text-fg-subtle">
-              Opens the Recording Studio, where Chrome asks what to share.
+            <p className="text-center text-[11px] leading-relaxed text-fg-subtle" data-testid="source-hint">
+              {source === 'tab' && target
+                ? `Records this tab${trackClicks ? ' and tracks your clicks in it for automatic zoom' : ''}.`
+                : source === 'tab'
+                  ? 'Chrome will ask which tab to share. Clicks can’t be tracked on this page.'
+                  : 'Opens the Recording Studio, where Chrome asks what to share. Clicks are tracked only when recording a browser tab.'}
             </p>
           </section>
         )}

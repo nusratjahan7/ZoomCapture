@@ -32,6 +32,9 @@ export function describeStorageError(error: unknown): string {
   if (isQuotaError(error)) {
     return 'There is not enough free disk space to save the recording. Nothing was deleted: free up space on your device (or delete recordings you no longer need), then retry.';
   }
+  if (errorName(error) === 'NothingRecordedError') {
+    return 'No screen video was captured, so there is nothing to save. Any other captured data is kept in the library under Unfinished recordings, where you can discard it.';
+  }
   if (errorName(error) === 'VersionError') {
     return 'The recording library was upgraded by a newer version of ZoomCapture. Reload this page.';
   }

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runModule04 } from './module04.mjs';
 import { button, dbCounts, dialogButton, launch, readRecordings, recordClip, restoreDisk, simulateFullDisk, sleep, waitForText } from './lib.mjs';
 
 const profile = mkdtempSync(join(tmpdir(), 'zoomcapture-e2e-'));
@@ -27,9 +28,9 @@ async function test(name, fn) {
   }
 }
 
-async function relaunch() {
+async function relaunch(options) {
   await env?.browser.close();
-  env = await launch(profile);
+  env = await launch(profile, options);
 }
 
 console.log(`ZoomCapture e2e — profile ${profile}`);
@@ -126,8 +127,9 @@ await test('preview: plays in a dialog and its temporary object URL is revoked o
   });
   assert.ok(Number.isFinite(duration) && duration > 2, `playable, finite duration (${duration})`);
   await library.keyboard.press('Escape');
-  await library.waitForFunction(() => !document.querySelector('dialog[open]'));
-  await sleep(300);
+  await library.waitForFunction(() => !document.querySelector('dialog[open]'), { polling: 100 });
+  // Revocation happens in React's effect cleanup right after the dialog closes.
+  await library.waitForFunction((url) => window.__urls.revoked.includes(url), { polling: 100, timeout: 3000 }, src).catch(() => undefined);
   const { urls, inUse } = await library.evaluate(() => ({
     urls: window.__urls,
     inUse: [...document.querySelectorAll('img, video')].map((el) => el.src),
@@ -202,6 +204,8 @@ await test('interrupted save: survives a browser restart and is recovered from t
   assert.equal(counts.recordingDrafts, 0);
   await library.waitForFunction(() => document.querySelectorAll('ul[aria-label="Recordings"] li').length === 2);
 });
+
+await runModule04(test, () => env, relaunch);
 
 await test('no page errors were logged', async () => {
   // Expected errors from the simulated full disk are reported in the UI, not thrown.

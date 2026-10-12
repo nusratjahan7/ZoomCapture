@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowUpRight, Pause, Play, Square } from 'lucide-react';
 import { sendMessage } from '@/services/messaging';
 import { CAPTURE_SOURCE_NOUN } from '@/shared/captureSources';
@@ -17,6 +17,20 @@ export function ActiveSessionCard({ session }: { session: RecordingSession }) {
   const [busy, setBusy] = useState<RecordingAction | 'open' | null>(null);
   const elapsed = useSessionElapsed(session.timing);
   const live = session.status === 'recording' || session.status === 'paused';
+
+  // Opening the popup on the recorded tab grants ZoomCapture access to it again (activeTab),
+  // e.g. after it navigated to another site: let the studio resume click tracking there.
+  const targetTabId = session.options.target?.tabId;
+  useEffect(() => {
+    if (targetTabId === undefined) return;
+    void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+      if (tab?.id === targetTabId) {
+        void chrome.runtime
+          .sendMessage({ channel: 'tracking-reattach', sessionId: session.id, tabId: targetTabId })
+          .catch(() => undefined);
+      }
+    });
+  }, [targetTabId, session.id]);
 
   const openStudio = async () => {
     setBusy('open');

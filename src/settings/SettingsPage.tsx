@@ -13,6 +13,7 @@ import type { CaptureFrameRate, CaptureResolution, CountdownSeconds } from '@/ty
 import { describeMediaError, getErrorMessage } from '@/utils/errors';
 import { formatBytes } from '@/utils/format';
 import { useMediaDevices } from '@/shared/hooks/useMediaDevices';
+import { AutoZoomSettingsPanel } from './AutoZoomSettingsPanel';
 
 const RESOLUTION_OPTIONS: Array<{ value: CaptureResolution; label: string }> = [
   { value: '1080p', label: 'Up to 1080p (1920×1080)' },
@@ -149,6 +150,11 @@ export function SettingsPage() {
                 />
               </div>
             </Panel>
+
+            <AutoZoomSettingsPanel
+              value={settings.autoZoom}
+              onChange={(patch) => save({ autoZoom: { ...settings.autoZoom, ...patch } })}
+            />
 
             <Panel title="Recording" description="How recording starts and how you control it.">
               <div className="space-y-5">

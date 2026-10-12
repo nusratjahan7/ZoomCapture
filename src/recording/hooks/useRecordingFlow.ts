@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { sendMessage } from '@/services/messaging';
 import { ensureThumbnail } from '@/services/media/thumbnail';
-import { finalizeDraft } from '@/services/recording/finalizeRecording';
+import { finalizeDraft, NothingRecordedError } from '@/services/recording/finalizeRecording';
 import { notifyLibraryChanged } from '@/services/storage/libraryEvents';
 import { RecordingController } from '@/services/recording/RecordingController';
 import { deleteDraft } from '@/services/storage/recordingDraftRepository';
+import type { TrackedClick } from '@/services/zoom/clicks';
 import type {
   CameraLayout,
+  ClickTrackingInfo,
   RecordingAction,
   RecordingTrackKind,
   SaveProgress,
@@ -31,6 +33,8 @@ export interface FlowInputs {
   camera: MediaStream | null;
   microphone: MediaStream | null;
   settings: UserSettings | null;
+  /** Click tracking availability for the current capture. */
+  clickTracking: ClickTrackingInfo;
 }
 
 export interface FlowCallbacks {
@@ -68,6 +72,7 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
   const [cameraHidden, setCameraHidden] = useState(false);
   const [screenMimeType, setScreenMimeType] = useState<string | null>(null);
   const [recordedKinds, setRecordedKinds] = useState<RecordingTrackKind[]>([]);
+  const [clickCount, setClickCount] = useState(0);
 
   const controllerRef = useRef<RecordingController | null>(null);
   const inputsRef = useRef(inputs);
@@ -113,7 +118,9 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
         callbacksRef.current.onSaved(recording.id);
       } catch (error) {
         const message = describeStorageError(error);
-        setFailure({ message, storageFull: isQuotaError(error), draftId });
+        // Retrying cannot help when no screen video exists; the leftovers stay in the library.
+        const retryable = !(error instanceof NothingRecordedError);
+        setFailure({ message, storageFull: isQuotaError(error), draftId: retryable ? draftId : null });
         setPhase('failed');
         notifyLibraryChanged({ type: 'drafts' });
         await report('error', message).catch(() => undefined);
@@ -149,7 +156,7 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
   }, [failure, save]);
 
   const begin = useCallback(async () => {
-    const { sessionId, display, surface, camera, microphone, settings } = inputsRef.current;
+    const { sessionId, display, surface, camera, microphone, settings, clickTracking } = inputsRef.current;
     if (!sessionId || !display || !surface || !settings) return;
     phaseRef.current = 'starting';
     setPhase('starting');
@@ -162,6 +169,8 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
         name: recordingName(),
         source: { surface: surface.surface, label: surface.label },
         cameraLayout: settings.cameraBubble,
+        clickTracking,
+        autoZoom: settings.autoZoom,
         onTrackEnded: (kind) => {
           callbacksRef.current.onTrackEnded(kind);
           if (kind === 'screen') void stop();
@@ -177,6 +186,7 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
       setCameraHidden(false);
       setElapsedMs(0);
       setScreenMimeType(controller.screenMimeType);
+      setClickCount(0);
       setRecordedKinds(controller.trackInfo.map((track) => track.kind));
       phaseRef.current = 'recording';
       setPhase('recording');
@@ -263,6 +273,19 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
     controllerRef.current?.setCameraLayout(layout);
   }, []);
 
+  /** A click from the recorded tab; placed on the timeline by when it happened. */
+  const addTrackedClick = useCallback((click: TrackedClick) => {
+    const controller = controllerRef.current;
+    if (!controller) return;
+    if ('event' in controller.addTrackedClick(click)) setClickCount(controller.clickCount);
+  }, []);
+
+  // Keep the saved tracking status current (e.g. tracking paused after a navigation).
+  const { clickTracking } = inputs;
+  useEffect(() => {
+    controllerRef.current?.setClickTracking(clickTracking);
+  }, [clickTracking]);
+
   /** Handles a command from outside the studio; returns an error message if it does not apply. */
   const command = useCallback(
     (action: RecordingAction): string | null => {
@@ -288,6 +311,8 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
     cameraHidden,
     screenMimeType,
     recordedKinds,
+    clickCount,
+    addTrackedClick,
     start,
     cancelCountdown,
     pause,
