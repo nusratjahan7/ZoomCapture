@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampFocus, mapToOutput, normalizeViewportPoint, zoomTransformOrigin } from '@/services/zoom/coordinates';
+import { clampFocus, mapToOutput, normalizeViewportPoint } from '@/services/zoom/coordinates';
 
 const viewport = { left: 0, top: 0, width: 1280, height: 720 };
 
@@ -66,21 +66,5 @@ describe('keeping the zoomed view inside the frame', () => {
     expect(clampFocus({ x: 0.02, y: 0.98 }, 2)).toEqual({ x: 0.25, y: 0.75 });
     expect(clampFocus({ x: 0.5, y: 0.4 }, 2)).toEqual({ x: 0.5, y: 0.4 });
     expect(clampFocus({ x: 0.1, y: 0.1 }, 1)).toEqual({ x: 0.5, y: 0.5 });
-  });
-
-  it('computes a transform-origin that centres the view on the focus', () => {
-    for (const [focus, scale] of [
-      [{ x: 0.3, y: 0.6 }, 2],
-      [{ x: 0.7, y: 0.4 }, 3],
-      [{ x: 0.05, y: 0.95 }, 2.5],
-    ] as const) {
-      const origin = zoomTransformOrigin(focus, scale);
-      const c = clampFocus(focus, scale);
-      // A point p is drawn at o + s·(p − o): the clamped focus must land at the centre.
-      expect(origin.x + scale * (c.x - origin.x)).toBeCloseTo(0.5, 10);
-      expect(origin.y + scale * (c.y - origin.y)).toBeCloseTo(0.5, 10);
-      expect(origin.x).toBeGreaterThanOrEqual(0);
-      expect(origin.x).toBeLessThanOrEqual(1);
-    }
   });
 });

@@ -6,7 +6,7 @@ import type { MarkerPatch } from '@/services/zoom/markers';
 
 const POSITION_MODES = [
   { value: 'fixed', label: 'Fixed', icon: Focus },
-  { value: 'follow-cursor', label: 'Follow clicks', icon: MousePointer2 },
+  { value: 'follow-cursor', label: 'Follow cursor', icon: MousePointer2 },
 ] as const satisfies ReadonlyArray<{ value: ZoomPositionMode; label: string; icon: typeof Focus }>;
 
 const EFFECTS = [

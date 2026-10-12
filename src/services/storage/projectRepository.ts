@@ -35,3 +35,17 @@ export async function updateZoomMarkers(
     return updated;
   });
 }
+
+/** Project fields edited as settings (overlays, export choices). */
+export type ProjectSettingsPatch = Partial<Pick<Project, 'renderEffects' | 'exportSettings'>>;
+
+/** Applies a settings change in one read-modify-write transaction (see `updateZoomMarkers`). */
+export async function updateProjectSettings(projectId: string, change: (project: Project) => ProjectSettingsPatch): Promise<Project> {
+  return withTransaction(['projects'], 'readwrite', async (tx) => {
+    const project = await tx.objectStore('projects').get(projectId);
+    if (!project) throw new Error('This project no longer exists.');
+    const updated: Project = { ...project, ...change(project), updatedAt: Date.now() };
+    await tx.objectStore('projects').put(updated);
+    return updated;
+  });
+}

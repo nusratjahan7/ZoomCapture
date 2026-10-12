@@ -39,6 +39,8 @@ export async function launch(userDataDir, { fakeMedia = true } = {}) {
           '--window-size=1400,900',
         ]
       : ['--window-size=1400,900', '--autoplay-policy=no-user-gesture-required'],
+    // Puppeteer mutes audio by default; real tab capture tests check the recorded sound.
+    ignoreDefaultArgs: fakeMedia ? [] : ['--mute-audio'],
     defaultViewport: { width: 1400, height: 900 },
   });
   const target = await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('/background.js'));

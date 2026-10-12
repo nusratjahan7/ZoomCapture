@@ -12,9 +12,8 @@ import {
   normalizeMarker,
   regenerateAutoMarkers,
   updateMarker,
-  zoomStateAt,
 } from '@/services/zoom/markers';
-import type { AutoZoomSettings, InteractionEvent, ZoomMarker } from '@/types';
+import type { AutoZoomSettings, InteractionEvent } from '@/types';
 import { SCREEN, seedDraft } from './helpers';
 
 const defaults = { defaultScale: 2, durationMs: 2000, transitionMs: 500 };
@@ -144,38 +143,6 @@ describe('editing markers', () => {
   });
 });
 
-describe('zoom state at a point in time', () => {
-  const marker: ZoomMarker = createMarker({ timeMs: 2000, position: { x: 0.3, y: 0.6 } }, defaults, 20_000, NOW);
-
-  it('eases in, holds, eases out', () => {
-    expect(zoomStateAt([marker], 1000).scale).toBe(1); // before
-    expect(zoomStateAt([marker], 1750).scale).toBeCloseTo(1.5, 5); // halfway in
-    expect(zoomStateAt([marker], 2000).scale).toBe(2);
-    expect(zoomStateAt([marker], 3500).scale).toBe(2); // holding
-    expect(zoomStateAt([marker], 4250).scale).toBeCloseTo(1.5, 5); // halfway out
-    expect(zoomStateAt([marker], 5000).scale).toBe(1);
-    expect(zoomStateAt([marker], 3000).focus).toEqual({ x: 0.3, y: 0.6 });
-  });
-
-  it('ignores disabled markers', () => {
-    expect(zoomStateAt([{ ...marker, enabled: false }], 3000).scale).toBe(1);
-  });
-
-  it('follow-cursor markers pan to the latest click', () => {
-    const follow = { ...marker, positionMode: 'follow-cursor' as const };
-    const clicks = [click('a', 2000, 0.3, 0.6), click('b', 3000, 0.7, 0.4)];
-    expect(zoomStateAt([follow], 2500, clicks).focus).toEqual({ x: 0.3, y: 0.6 });
-    expect(zoomStateAt([follow], 3200, clicks).focus).toEqual({ x: 0.7, y: 0.4 });
-  });
-
-  it('highlight effects do not magnify', () => {
-    const state = zoomStateAt([{ ...marker, effect: 'highlight' }], 3000);
-    expect(state.scale).toBe(1);
-    expect(state.strength).toBe(1);
-    expect(state.focus).toEqual({ x: 0.3, y: 0.6 });
-  });
-});
-
 describe('persistence', () => {
   const autoZoom: AutoZoomSettings = { enabled: true, trackClicks: true, scale: 2.5, durationMs: 3000, transitionSpeed: 'fast' };
 
@@ -186,6 +153,11 @@ describe('persistence', () => {
     await db.put('recordingDrafts', {
       ...draft,
       interactions: [click('a', 1000), click('a-dup', 1100), click('b', 6000, 0.9, 0.1)],
+      // Pointer batches can arrive out of order.
+      cursor: [
+        { timeMs: 2000, x: 0.5, y: 0.5 },
+        { timeMs: 1000, x: 0.3, y: 0.6 },
+      ],
       clickTracking: options.tracked ? { mode: 'tab', tabTitle: 'Docs', origin: 'https://docs.example' } : { mode: 'unsupported', reason: 'Screen' },
       autoZoom: { ...autoZoom, enabled: options.enabled ?? true },
     });
@@ -196,6 +168,7 @@ describe('persistence', () => {
     const { recording, project } = await saveTrackedRecording({ tracked: true });
     expect(recording.interactions.map((e) => e.id)).toEqual(['a', 'b']);
     expect(recording.clickTracking).toMatchObject({ mode: 'tab', origin: 'https://docs.example' });
+    expect(recording.cursor?.map((sample) => sample.timeMs)).toEqual([1000, 2000]);
     expect(project.zoom).toMatchObject({ mode: 'auto', defaultScale: 2.5, durationMs: 3000, transitionMs: 350 });
     expect(project.timeline.zoomMarkers.map((m) => [m.timeMs, m.scale, m.sourceEventIds])).toEqual([
       [1000, 2.5, ['a']],

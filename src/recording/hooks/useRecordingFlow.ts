@@ -5,7 +5,7 @@ import { finalizeDraft, NothingRecordedError } from '@/services/recording/finali
 import { notifyLibraryChanged } from '@/services/storage/libraryEvents';
 import { RecordingController } from '@/services/recording/RecordingController';
 import { deleteDraft } from '@/services/storage/recordingDraftRepository';
-import type { TrackedClick } from '@/services/zoom/clicks';
+import type { TrackedClick, TrackedPointerBatch } from '@/services/zoom/clicks';
 import type {
   CameraLayout,
   ClickTrackingInfo,
@@ -280,6 +280,11 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
     if ('event' in controller.addTrackedClick(click)) setClickCount(controller.clickCount);
   }, []);
 
+  /** Pointer movement from the recorded tab (follow-cursor zoom, cursor highlight). */
+  const addPointerBatch = useCallback((batch: TrackedPointerBatch) => {
+    controllerRef.current?.addPointerBatch(batch);
+  }, []);
+
   // Keep the saved tracking status current (e.g. tracking paused after a navigation).
   const { clickTracking } = inputs;
   useEffect(() => {
@@ -313,6 +318,7 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
     recordedKinds,
     clickCount,
     addTrackedClick,
+    addPointerBatch,
     start,
     cancelCountdown,
     pause,

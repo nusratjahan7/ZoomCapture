@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   ArrowLeft,
   AudioLines,
   Download,
   FileQuestion,
   Film,
+  Clapperboard,
   Image,
   Loader2,
   Monitor,
@@ -20,7 +21,8 @@ import { getAssetBlob } from '@/services/storage/assetRepository';
 import { notifyLibraryChanged, subscribeLibrary } from '@/services/storage/libraryEvents';
 import { getRecordingDetails, type RecordingDetails } from '@/services/storage/recordingRepository';
 import { Button, buttonClassName, ConfirmDialog, EmptyState, IconButton, Panel, useToast, type ToastOptions } from '@/shared/components';
-import { updateZoomMarkers } from '@/services/storage/projectRepository';
+import { updateProjectSettings, updateZoomMarkers, type ProjectSettingsPatch } from '@/services/storage/projectRepository';
+import { renderEffectsOf } from '@/services/render/frameState';
 import {
   createMarker,
   deleteMarker,
@@ -32,10 +34,12 @@ import {
 } from '@/services/zoom/markers';
 import { useAssetUrl } from '@/shared/hooks/useAssetUrl';
 import { useRecordingActions } from '@/shared/hooks/useRecordingActions';
-import type { MediaAsset, MediaAssetKind, ZoomMarker } from '@/types';
+import type { MediaAsset, MediaAssetKind, NormalizedPoint, Project, ZoomMarker } from '@/types';
 import { formatBytes, formatDuration } from '@/utils/format';
 import { describeStorageError } from '@/utils/storageErrors';
 import { EditorHeader } from './EditorHeader';
+import { RenderEffectsPanel } from './RenderEffectsPanel';
+import { RenderVideoDialog } from './RenderVideoDialog';
 import { TimelineView } from './TimelineView';
 import { ZoomEffectsPanel } from './ZoomEffectsPanel';
 import { ZoomMarkerDialog } from './ZoomMarkerDialog';
@@ -175,6 +179,14 @@ function Workspace({ details }: { details: RecordingDetails }) {
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
   const [busy, setBusy] = useState(false);
   const [previewZoom, setPreviewZoom] = useState(true);
+  const [rendering, setRendering] = useState(false);
+  const effects = renderEffectsOf(project);
+  const cursor = recording.cursor;
+  const scene = useMemo(
+    () => ({ markers, clicks: recording.interactions, cursor: cursor ?? [], effects }),
+    // `effects` is rebuilt on each render; its fields are what matter.
+    [markers, recording.interactions, cursor, effects.clickEmphasis, effects.cursorHighlight],
+  );
   const durationMs = recording.durationMs;
   const aspectRatio = recording.width && recording.height ? recording.width / recording.height : 16 / 9;
 
@@ -193,6 +205,19 @@ function Workspace({ details }: { details: RecordingDetails }) {
       setBusy(false);
     }
   };
+
+  const changeSettings = async (change: (current: Project) => ProjectSettingsPatch) => {
+    try {
+      const updated = await updateProjectSettings(project.id, change);
+      setProject(updated);
+      notifyLibraryChanged({ type: 'project', recordingId: recording.id });
+    } catch (error) {
+      toast.show({ variant: 'error', title: 'Could not save the setting', description: describeStorageError(error) });
+    }
+  };
+
+  const moveMarkerPosition = (marker: ZoomMarker, position: NormalizedPoint) =>
+    void changeMarkers((current) => updateMarker(current, marker.id, { position }, durationMs));
 
   const seekTo = (ms: number) => {
     const video = mainRef.current;
@@ -287,7 +312,7 @@ function Workspace({ details }: { details: RecordingDetails }) {
       <EditorHeader>
         {backLink}
         <Button
-          variant="primary"
+          variant="secondary"
           size="sm"
           icon={Download}
           loading={downloading}
@@ -296,7 +321,10 @@ function Workspace({ details }: { details: RecordingDetails }) {
             void actions.download(recording).finally(() => setDownloading(false));
           }}
         >
-          Download
+          Download original
+        </Button>
+        <Button variant="primary" size="sm" icon={Clapperboard} onClick={() => setRendering(true)}>
+          Render video
         </Button>
       </EditorHeader>
       <main className="mx-auto grid w-full max-w-7xl flex-1 gap-6 p-6 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -312,11 +340,11 @@ function Workspace({ details }: { details: RecordingDetails }) {
               cameraUrl={cameraUrl}
               cameraLayout={layout}
               aspectRatio={aspectRatio}
-              markers={markers}
-              interactions={recording.interactions}
+              scene={scene}
               selectedMarker={markers.find((marker) => marker.id === selectedId) ?? null}
               previewZoom={previewZoom}
               onPreviewZoomChange={setPreviewZoom}
+              onMarkerPositionChange={moveMarkerPosition}
               videoRef={mainRef}
               cameraRef={cameraRef}
               label={`${recording.name} recording`}
@@ -328,6 +356,10 @@ function Workspace({ details }: { details: RecordingDetails }) {
             currentMs={playheadMs}
             selectedMarkerId={selectedId}
             onSeek={seekTo}
+            onMarkerMove={(id, timeMs) => {
+              setSelectedId(id);
+              void changeMarkers((current) => updateMarker(current, id, { timeMs }, durationMs));
+            }}
             onMarkerSelect={(id) => {
               const marker = markers.find((candidate) => candidate.id === id);
               if (marker) {
@@ -356,6 +388,13 @@ function Workspace({ details }: { details: RecordingDetails }) {
         </div>
 
         <div className="space-y-4">
+          <RenderEffectsPanel
+            effects={effects}
+            clicks={recording.interactions.length}
+            cursorSamples={cursor?.length ?? 0}
+            busy={busy}
+            onChange={(patch) => void changeSettings((current) => ({ renderEffects: { ...renderEffectsOf(current), ...patch } }))}
+          />
           <Panel as="aside" title="Recording details">
             <dl className="space-y-3 text-sm">
               {facts.map(([term, value]) => (
@@ -400,6 +439,14 @@ function Workspace({ details }: { details: RecordingDetails }) {
         </div>
       </main>
       {actions.dialogs}
+      <RenderVideoDialog
+        open={rendering}
+        onClose={() => setRendering(false)}
+        recording={recording}
+        project={project}
+        assets={assets}
+        onSettingsChange={(exportSettings) => void changeSettings(() => ({ exportSettings }))}
+      />
       <ZoomMarkerDialog
         marker={editing}
         durationMs={durationMs}

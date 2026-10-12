@@ -6,8 +6,8 @@ export type { ExportFormat };
  * Export contract for the export module.
  *
  * Recordings are captured as WebM (VP9/VP8 + Opus), the format Chrome's MediaRecorder writes
- * reliably. Producing MP4 or GIF, or applying zoom effects, camera overlay and backgrounds,
- * means decoding and re-encoding frames (WebCodecs + a muxer). That is the export module's job:
+ * reliably. Rendering with zoom effects, overlays and the camera bubble is done by
+ * `services/render/renderVideo.ts` (WebM). Other formats (MP4, GIF) are for the export module:
  * it implements `Exporter` (reading `project.exportSettings`) and registers it in `exporters.ts`.
  */
 export interface ExportInput {

@@ -1,13 +1,15 @@
 /**
  * Click tracker injected (only on request, via chrome.scripting + activeTab) into the tab being
- * recorded. It reports where and when the user presses the primary mouse button, so zoom
- * effects can be generated. Nothing else is read: no page content, no text, no keystrokes.
+ * recorded. While recording, it reports where and when the user presses the primary mouse button
+ * (to generate zoom effects) and where the pointer moves (sampled at most ~30 times a second, for
+ * follow-cursor zoom and the cursor highlight). Nothing else is read: no page content, no text,
+ * no keystrokes.
  *
  * Built as a standalone IIFE (vite.content.config.ts) because injected files cannot import
  * modules. While not recording, an on-page notice makes the tracking visible; it hides during
  * recording so it never appears in the video.
  */
-import type { TrackedClick } from '@/services/zoom/clicks';
+import type { TrackedClick, TrackedPointerBatch } from '@/services/zoom/clicks';
 import type { ViewportRect } from '@/services/zoom/coordinates';
 
 interface TrackerConfig {
@@ -24,11 +26,15 @@ interface Tracker {
 type TrackerMessage =
   | { channel: 'tracker'; type: 'ready'; sessionId: string; origin: string; title: string }
   | { channel: 'tracker'; type: 'click'; sessionId: string; click: TrackedClick }
+  | { channel: 'tracker'; type: 'pointer'; sessionId: string; batch: TrackedPointerBatch }
   | { channel: 'tracker'; type: 'detached'; sessionId: string };
 
 type ControlMessage = { channel: 'tracker-control'; sessionId: string; action: 'recording'; active: boolean } | { channel: 'tracker-control'; sessionId: string; action: 'stop' };
 
 const GLOBAL_KEY = '__zoomCaptureTracker';
+/** Minimum time between pointer samples, and how often batches are sent. */
+const SAMPLE_INTERVAL_MS = 33;
+const FLUSH_INTERVAL_MS = 250;
 const scope = window as unknown as Record<string, Tracker | undefined>;
 
 function captureViewport(): ViewportRect {
@@ -54,13 +60,16 @@ function createIndicator(): HTMLElement {
       small { display: block; color: #a3a9bb; margin-top: 2px; }
     </style>
     <div role="status"><span class="dot"></span><span>ZoomCapture is tracking clicks in this tab for automatic zoom.
-      <small>Only click positions and times are recorded. This notice is hidden while recording.</small></span></div>`;
+      <small>Only pointer positions and clicks are recorded, while recording. This notice is hidden while recording.</small></span></div>`;
   return host;
 }
 
 function createTracker(): Tracker {
   let config: TrackerConfig | null = null;
   let indicator: HTMLElement | null = null;
+  let pending: TrackedPointerBatch['samples'] = [];
+  let lastSampleAt = Number.NEGATIVE_INFINITY;
+  let flushTimer = 0;
 
   const send = (message: TrackerMessage) => {
     try {
@@ -71,8 +80,28 @@ function createTracker(): Tracker {
     }
   };
 
+  const flush = () => {
+    if (!config || pending.length === 0) return;
+    send({ channel: 'tracker', type: 'pointer', sessionId: config.sessionId, batch: { viewport: captureViewport(), samples: pending } });
+    pending = [];
+  };
+
+  const addSample = (event: PointerEvent, hidden = false, force = false) => {
+    if (!config?.recording || !event.isPrimary) return;
+    if (!force && event.timeStamp - lastSampleAt < SAMPLE_INTERVAL_MS) return;
+    lastSampleAt = event.timeStamp;
+    pending.push({ epochMs: performance.timeOrigin + event.timeStamp, clientX: event.clientX, clientY: event.clientY, hidden: hidden || undefined });
+  };
+
+  const onPointerMove = (event: PointerEvent) => addSample(event);
+  // `relatedTarget` is null when the pointer leaves the page entirely.
+  const onPointerOut = (event: PointerEvent) => {
+    if (event.relatedTarget === null) addSample(event, true, true);
+  };
+
   const onPointerDown = (event: PointerEvent) => {
     if (!config || !event.isPrimary) return;
+    addSample(event, false, true);
     send({
       channel: 'tracker',
       type: 'click',
@@ -90,6 +119,7 @@ function createTracker(): Tracker {
   };
 
   const onPageHide = () => {
+    flush();
     if (config) send({ channel: 'tracker', type: 'detached', sessionId: config.sessionId });
   };
 
@@ -105,6 +135,8 @@ function createTracker(): Tracker {
       config = next;
       if (firstStart) {
         window.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true });
+        window.addEventListener('pointermove', onPointerMove, { capture: true, passive: true });
+        document.addEventListener('pointerout', onPointerOut, { capture: true, passive: true });
         window.addEventListener('pagehide', onPageHide);
         chrome.runtime.onMessage.addListener(onControl);
       }
@@ -116,13 +148,24 @@ function createTracker(): Tracker {
       if (active) {
         indicator?.remove();
         indicator = null;
-      } else if (!indicator) {
+        if (!flushTimer) flushTimer = window.setInterval(flush, FLUSH_INTERVAL_MS);
+      } else {
+        flush();
+        window.clearInterval(flushTimer);
+        flushTimer = 0;
+      }
+      if (!active && !indicator) {
         indicator = createIndicator();
         document.documentElement.append(indicator);
       }
     },
     stop() {
+      flush();
+      window.clearInterval(flushTimer);
+      flushTimer = 0;
       window.removeEventListener('pointerdown', onPointerDown, { capture: true });
+      window.removeEventListener('pointermove', onPointerMove, { capture: true });
+      document.removeEventListener('pointerout', onPointerOut, { capture: true });
       window.removeEventListener('pagehide', onPageHide);
       try {
         chrome.runtime.onMessage.removeListener(onControl);

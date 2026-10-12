@@ -141,6 +141,8 @@ async function commitRecording(draft: RecordingDraft): Promise<FinalizeResult> {
       screenAssetId: screen.id,
       assetIds: assets.map((asset) => asset.id),
       interactions: dedupeInteractions(draft.interactions ?? []),
+      // Batches can arrive slightly out of order; the stored path is sorted by time.
+      cursor: draft.cursor?.length ? [...draft.cursor].sort((a, b) => a.timeMs - b.timeMs) : undefined,
       clickTracking: draft.clickTracking ?? { mode: 'unsupported', reason: 'Click tracking was not available for this recording.' },
       createdAt: draft.createdAt,
       updatedAt: now,

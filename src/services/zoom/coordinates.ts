@@ -49,6 +49,18 @@ export function mapToOutput(point: NormalizedPoint, source: Size, output: Size, 
 }
 
 /**
+ * Converts a point normalised to the captured page into one normalised to the video frame.
+ * Tab capture scales the page to fit the frame and letterboxes any difference in aspect ratio
+ * (e.g. after the window is resized), so the page may fill only part of the frame. Without a
+ * known frame size the point is returned unchanged.
+ */
+export function pageToFrame(point: NormalizedPoint, page: Size, frame: Size | null | undefined): NormalizedPoint {
+  if (!frame || !(frame.width > 0 && frame.height > 0) || !(page.width > 0 && page.height > 0)) return point;
+  const mapped = mapToOutput(point, page, frame, 'contain')!;
+  return { x: mapped.x / frame.width, y: mapped.y / frame.height };
+}
+
+/**
  * Centre of the visible window when zoomed `scale`× around `focus`, moved inwards so the zoomed
  * view never shows empty space beyond the frame edges.
  */
@@ -56,16 +68,6 @@ export function clampFocus(focus: NormalizedPoint, scale: number): NormalizedPoi
   if (scale <= 1) return { x: 0.5, y: 0.5 };
   const half = 0.5 / scale;
   return { x: clamp(focus.x, half, 1 - half), y: clamp(focus.y, half, 1 - half) };
-}
-
-/**
- * CSS `transform-origin` (0-1) that makes `transform: scale(scale)` centre the view on `focus`.
- * A point p maps to o + s·(p − o); solving o + s·(c − o) = ½ for the clamped focus c gives o.
- */
-export function zoomTransformOrigin(focus: NormalizedPoint, scale: number): NormalizedPoint {
-  if (scale <= 1) return { x: 0.5, y: 0.5 };
-  const c = clampFocus(focus, scale);
-  return { x: (0.5 - scale * c.x) / (1 - scale), y: (0.5 - scale * c.y) / (1 - scale) };
 }
 
 export function distance(a: NormalizedPoint, b: NormalizedPoint): number {

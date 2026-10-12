@@ -75,7 +75,7 @@ export function ClickTrackingPanel({
       {status.state !== 'unsupported' && (
         <p className="mt-3 flex gap-2 border-t border-line pt-3 text-xs text-fg-subtle">
           <ShieldCheck size={14} aria-hidden className="mt-0.5 shrink-0" />
-          Only the position and time of each click in this tab are recorded, never page content or typing.
+          Only clicks and pointer positions in this tab are recorded, never page content or typing.
           {!autoZoomEnabled && ' Automatic zoom is off, so no effects are created; you can generate them later in the editor.'}
         </p>
       )}

@@ -30,6 +30,11 @@ export async function requestTargetTabStream(
     const [width, height] = RESOLUTION_LIMITS[settings.resolution];
     video.mandatory.maxWidth = width;
     video.mandatory.maxHeight = height;
+    // With only a maximum (or a minimum of the same shape), Chrome produces frames of exactly that
+    // shape and letterboxes the page into them. A minimum with a different aspect ratio selects
+    // "any size within the limits": frames keep the page's own aspect ratio, so no black bars.
+    video.mandatory.minWidth = 2;
+    video.mandatory.minHeight = 2;
   }
   const audio: TabConstraints | false = settings.captureSystemAudio
     ? { mandatory: { chromeMediaSource: 'tab', chromeMediaSourceId: streamId } }

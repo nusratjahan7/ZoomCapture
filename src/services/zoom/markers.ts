@@ -1,11 +1,11 @@
 import { ZOOM_LIMITS, type InteractionEvent, type NormalizedPoint, type ZoomMarker, type ZoomSettings } from '@/types';
 import { createId } from '@/utils/id';
 import { dedupeInteractions } from './clicks';
-import { clampFocus } from './coordinates';
 
 /**
- * Zoom marker logic: generation from clicks, editing operations and evaluation at a point in time.
- * Everything here is pure (no storage, no DOM) so it is shared by the studio, editor and tests.
+ * Zoom marker logic: generation from clicks and editing operations. Everything here is pure (no
+ * storage, no DOM) so it is shared by the studio, editor and tests. Evaluating markers at a point
+ * in time is the renderer's job (services/render/frameState.ts).
  *
  * Timing of one marker:
  *   [timeMs − transitionMs, timeMs]                     zooming in
@@ -163,48 +163,4 @@ export function regenerateAutoMarkers(
 ): ZoomMarker[] {
   const manual = markers.filter((marker) => marker.origin === 'manual');
   return sortMarkers([...manual, ...generateZoomMarkers(interactions, defaults, timelineDurationMs, now)]);
-}
-
-const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
-
-export interface ZoomState {
-  /** 1 when no zoom is active. */
-  scale: number;
-  /** Clamped focus to centre the view on. */
-  focus: NormalizedPoint;
-  /** The effect currently applied, if any. */
-  marker: ZoomMarker | null;
-  /** 0-1 strength of the current effect (useful for highlight opacity). */
-  strength: number;
-}
-
-/**
- * Zoom applied at a timeline time. When effects overlap, the one that started last wins.
- * Follow-cursor markers pan to the most recent click inside their span.
- */
-export function zoomStateAt(markers: ZoomMarker[], timeMs: number, interactions: InteractionEvent[] = []): ZoomState {
-  let active: ZoomMarker | null = null;
-  for (const marker of markers) {
-    if (!marker.enabled) continue;
-    const { startMs, endMs } = markerSpan(marker);
-    if (timeMs >= startMs && timeMs <= endMs && (!active || marker.timeMs >= active.timeMs)) active = marker;
-  }
-  if (!active) return { scale: 1, focus: { x: 0.5, y: 0.5 }, marker: null, strength: 0 };
-
-  const holdEnd = active.timeMs + active.durationMs;
-  const strength =
-    timeMs < active.timeMs
-      ? easeInOutCubic(clamp((timeMs - (active.timeMs - active.transitionMs)) / active.transitionMs, 0, 1))
-      : timeMs <= holdEnd
-        ? 1
-        : 1 - easeInOutCubic(clamp((timeMs - holdEnd) / active.transitionMs, 0, 1));
-
-  let focus = active.position;
-  if (active.positionMode === 'follow-cursor') {
-    const latest = interactions.filter((event) => event.timeMs >= active.timeMs && event.timeMs <= timeMs).at(-1);
-    if (latest) focus = latest.position;
-  }
-  if (active.effect !== 'zoom') return { scale: 1, focus, marker: active, strength };
-  const scale = 1 + (active.scale - 1) * strength;
-  return { scale, focus: clampFocus(focus, scale), marker: active, strength };
 }

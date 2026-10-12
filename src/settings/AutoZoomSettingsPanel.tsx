@@ -28,7 +28,7 @@ export function AutoZoomSettingsPanel({
           <Toggle
             icon={MousePointerClick}
             label="Track clicks while recording a tab"
-            description="Records only the position and time of each click"
+            description="Records only clicks and pointer positions in that tab, never page content or typing"
             checked={value.trackClicks}
             onCheckedChange={(trackClicks) => onChange({ trackClicks })}
           />
