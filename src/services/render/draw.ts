@@ -1,12 +1,17 @@
-import { CAMERA_BUBBLE_SCALE, type CameraLayout } from '@/types';
+import { CAMERA_BUBBLE_SCALE, type CameraLayout, type TextClip, type TextSize } from '@/types';
 import { sourceCrop } from './camera';
+import type { Rect } from './compose';
 import type { FrameState } from './frameState';
 
 /**
- * Draws one output frame: the zoomed source, effect overlays and the camera bubble.
- * Used unchanged by the editor preview (HTML canvas, from a <video>) and the rendered video
- * (OffscreenCanvas, from decoded frames). All sizes are relative to the output frame, so the
- * preview at any size looks like a scaled copy of the rendered video.
+ * Draws one output frame: the zoomed video layers, effect overlays, text annotations and the
+ * camera bubble. Used unchanged by the editor preview (HTML canvas, from <video> elements) and
+ * the rendered video (OffscreenCanvas, from decoded frames). All sizes are relative to the output
+ * frame, so the preview at any size looks like a scaled copy of the rendered video.
+ *
+ * The recording's picture fills `content` (the whole frame unless the output has another aspect
+ * ratio, then it is letterboxed). Zoom and the click/cursor overlays apply inside `content`; text
+ * and the camera bubble are placed relative to the whole frame.
  */
 
 type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
@@ -18,9 +23,13 @@ export interface FrameImage {
 }
 
 export interface FrameSources {
-  screen: FrameImage | null;
+  /** Video-track layers, bottom first. */
+  layers: Array<FrameImage | null>;
   camera?: FrameImage | null;
   cameraLayout?: CameraLayout;
+  texts?: readonly TextClip[];
+  /** Where the recording's picture sits in the frame; defaults to the whole frame. */
+  content?: Rect;
 }
 
 export const OVERLAY_STYLE = {
@@ -32,30 +41,121 @@ export const OVERLAY_STYLE = {
   annotationText: '#ffffff',
 } as const;
 
+export const TEXT_SIZE: Record<TextSize, number> = { small: 0.04, medium: 0.06, large: 0.09 };
+
 export function drawFrame(ctx: Context2D, width: number, height: number, sources: FrameSources, state: FrameState): void {
+  const content = sources.content ?? { x: 0, y: 0, width, height };
   ctx.save();
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, width, height);
-  if (sources.screen) {
-    const { sx, sy, sw, sh } = sourceCrop(state.camera, sources.screen);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(sources.screen.image, sx, sy, sw, sh, 0, 0, width, height);
-  }
-  const unit = Math.min(width, height);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
 
-  if (state.highlight) drawHighlight(ctx, width, height, unit, state.highlight);
-  for (const ripple of state.ripples) drawRipple(ctx, width, height, unit, ripple);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(content.x, content.y, content.width, content.height);
+  ctx.clip();
+  for (const layer of sources.layers) if (layer) drawLayer(ctx, content, layer, state);
+  ctx.restore();
+
+  // Overlays live in the content's coordinates (they follow the zoomed picture).
+  ctx.save();
+  ctx.translate(content.x, content.y);
+  const cw = content.width;
+  const ch = content.height;
+  const unit = Math.min(cw, ch);
+  if (state.highlight) drawHighlight(ctx, cw, ch, unit, state.highlight);
+  for (const ripple of state.ripples) drawRipple(ctx, cw, ch, unit, ripple);
   if (state.cursor) {
     ctx.fillStyle = OVERLAY_STYLE.cursor;
     ctx.beginPath();
-    ctx.arc(state.cursor.x * width, state.cursor.y * height, unit * 0.035, 0, Math.PI * 2);
+    ctx.arc(state.cursor.x * cw, state.cursor.y * ch, unit * 0.035, 0, Math.PI * 2);
     ctx.fill();
   }
-  if (state.annotation) drawAnnotation(ctx, width, height, unit, state.annotation);
+  if (state.annotation) drawAnnotation(ctx, cw, ch, unit, state.annotation);
+  ctx.restore();
+
+  for (const text of sources.texts ?? []) drawText(ctx, width, height, text);
   if (sources.camera && sources.cameraLayout) drawCameraBubble(ctx, width, height, sources.camera, sources.cameraLayout);
   ctx.restore();
+}
+
+/**
+ * One video layer, fitted inside the content area ("contain") and seen through the zoom camera.
+ * A layer with the content's own shape (the screen recording) is drawn as a source crop.
+ */
+function drawLayer(ctx: Context2D, content: Rect, layer: FrameImage, state: FrameState) {
+  const { scale, offsetX, offsetY } = state.camera;
+  const fit = Math.min(content.width / layer.width, content.height / layer.height);
+  const w = (layer.width * fit) / content.width;
+  const h = (layer.height * fit) / content.height;
+  if (Math.abs(w - 1) < 1e-3 && Math.abs(h - 1) < 1e-3) {
+    const { sx, sy, sw, sh } = sourceCrop(state.camera, layer);
+    ctx.drawImage(layer.image, sx, sy, sw, sh, content.x, content.y, content.width, content.height);
+    return;
+  }
+  // Normalised rect of the layer in the content, then through the camera (u = p · scale − offset).
+  const x = (1 - w) / 2;
+  const y = (1 - h) / 2;
+  ctx.drawImage(
+    layer.image,
+    content.x + (x * scale - offsetX) * content.width,
+    content.y + (y * scale - offsetY) * content.height,
+    w * scale * content.width,
+    h * scale * content.height,
+  );
+}
+
+/** A text annotation centred on its position, wrapped to at most 80 % of the frame width. */
+function drawText(ctx: Context2D, width: number, height: number, clip: TextClip) {
+  const text = clip.text.trim();
+  if (!text) return;
+  const fontSize = Math.max(10, Math.round(Math.min(width, height) * TEXT_SIZE[clip.style.size]));
+  ctx.save();
+  ctx.font = `700 ${fontSize}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lines = wrapText(ctx, text, width * 0.8);
+  const lineHeight = fontSize * 1.25;
+  const padX = fontSize * 0.6;
+  const padY = fontSize * 0.35;
+  const boxWidth = Math.max(...lines.map((line) => ctx.measureText(line).width)) + padX * 2;
+  const boxHeight = lines.length * lineHeight + padY * 2;
+  const cx = Math.min(width - boxWidth / 2, Math.max(boxWidth / 2, clip.position.x * width));
+  const cy = Math.min(height - boxHeight / 2, Math.max(boxHeight / 2, clip.position.y * height));
+  if (clip.style.background) {
+    ctx.fillStyle = OVERLAY_STYLE.annotationBackground;
+    ctx.beginPath();
+    ctx.roundRect(cx - boxWidth / 2, cy - boxHeight / 2, boxWidth, boxHeight, fontSize * 0.35);
+    ctx.fill();
+  } else {
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+    ctx.shadowBlur = fontSize * 0.25;
+  }
+  ctx.fillStyle = clip.style.color;
+  lines.forEach((line, index) => ctx.fillText(line, cx, cy - boxHeight / 2 + padY + lineHeight * (index + 0.5)));
+  ctx.restore();
+}
+
+/** Greedy word wrap; explicit line breaks are kept. Very long words are left to overflow. */
+function wrapText(ctx: Context2D, text: string, maxWidth: number): string[] {
+  const lines: string[] = [];
+  for (const paragraph of text.split(/?
+/)) {
+    let line = '';
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && ctx.measureText(candidate).width > maxWidth) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    lines.push(line);
+  }
+  return lines.slice(0, 6);
 }
 
 function drawHighlight(ctx: Context2D, width: number, height: number, unit: number, highlight: NonNullable<FrameState['highlight']>) {

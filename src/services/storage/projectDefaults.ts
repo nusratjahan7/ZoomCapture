@@ -34,6 +34,7 @@ export function newProject(id: string, recordingId: string, now = Date.now()): P
     schemaVersion: PROJECT_SCHEMA_VERSION,
     timeline: { durationMs: 0, tracks: [], zoomMarkers: [] },
     zoom: defaultZoomSettings(),
+    aspectRatio: 'source',
     subtitles: [],
     importedAssetIds: [],
     exportSettings: defaultExportSettings(),
