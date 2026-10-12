@@ -18,5 +18,5 @@ export function useMediaDevices() {
     await refresh();
   }, [refresh]);
 
-  return { inventory, requestAccess };
+  return { inventory, requestAccess, refresh };
 }

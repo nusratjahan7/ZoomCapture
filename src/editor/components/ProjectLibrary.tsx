@@ -9,6 +9,7 @@ import type { ProjectSummary } from '@/types';
 import { getErrorMessage } from '@/utils/errors';
 import { formatDuration, formatRelativeTime } from '@/utils/format';
 import { EditorHeader } from './EditorHeader';
+import { RecoverableRecordings } from './RecoverableRecordings';
 
 export function ProjectLibrary() {
   const { projects, loading, error, refresh } = useProjects();
@@ -53,6 +54,8 @@ export function ProjectLibrary() {
           <h1 className="text-xl font-semibold tracking-tight">Projects</h1>
           <p className="mt-1 text-sm text-fg-muted">Recordings are stored locally in this browser profile.</p>
         </div>
+
+        <RecoverableRecordings onRecovered={() => void refresh()} />
 
         {error ? (
           <p role="alert" className="rounded-xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">

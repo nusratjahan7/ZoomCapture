@@ -1,8 +1,8 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { MediaAsset, Project } from '@/types';
+import type { MediaAsset, Project, RecordingChunk, RecordingDraft } from '@/types';
 
 export const DB_NAME = 'zoomcapture';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 /**
  * Local project storage. Media blobs are kept in their own store so that listing projects
@@ -23,6 +23,16 @@ export interface ZoomCaptureDB extends DBSchema {
     key: string;
     value: Blob;
   };
+  /** Recordings in progress or interrupted (see RecordingDraft). */
+  recordingDrafts: {
+    key: string;
+    value: RecordingDraft;
+  };
+  /** Media chunks keyed by [draftId, trackId, seq] so a track reads back in order with one range. */
+  recordingChunks: {
+    key: [string, string, number];
+    value: RecordingChunk;
+  };
 }
 
 let dbPromise: Promise<IDBPDatabase<ZoomCaptureDB>> | undefined;
@@ -37,6 +47,10 @@ export function getDb(): Promise<IDBPDatabase<ZoomCaptureDB>> {
         const assets = db.createObjectStore('assets', { keyPath: 'id' });
         assets.createIndex('by-project', 'projectId');
         db.createObjectStore('assetBlobs');
+      }
+      if (oldVersion < 2) {
+        db.createObjectStore('recordingDrafts', { keyPath: 'id' });
+        db.createObjectStore('recordingChunks', { keyPath: ['draftId', 'trackId', 'seq'] });
       }
     },
     blocking() {
