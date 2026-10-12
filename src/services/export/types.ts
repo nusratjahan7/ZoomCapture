@@ -1,4 +1,6 @@
-import type { MediaAsset, Project } from '@/types';
+import type { ExportFormat, MediaAsset, Project, Recording } from '@/types';
+
+export type { ExportFormat };
 
 /**
  * Export contract for the export module.
@@ -6,9 +8,13 @@ import type { MediaAsset, Project } from '@/types';
  * Recordings are captured as WebM (VP9/VP8 + Opus), the format Chrome's MediaRecorder writes
  * reliably. Producing MP4 or GIF, or applying zoom effects, camera overlay and backgrounds,
  * means decoding and re-encoding frames (WebCodecs + a muxer). That is the export module's job:
- * it implements `Exporter` and registers it in `exporters.ts`. Nothing else changes.
+ * it implements `Exporter` (reading `project.exportSettings`) and registers it in `exporters.ts`.
  */
-export type ExportFormat = 'webm' | 'mp4' | 'gif';
+export interface ExportInput {
+  recording: Recording;
+  project: Project;
+  assets: MediaAsset[];
+}
 
 export interface ExportOptions {
   format: ExportFormat;
@@ -24,8 +30,8 @@ export interface ExportResult {
 
 export interface Exporter {
   readonly id: string;
-  supports(project: Project, assets: MediaAsset[], format: ExportFormat): boolean;
-  export(project: Project, assets: MediaAsset[], options: ExportOptions): Promise<ExportResult>;
+  supports(input: ExportInput, format: ExportFormat): boolean;
+  export(input: ExportInput, options: ExportOptions): Promise<ExportResult>;
 }
 
 export class ExportUnavailableError extends Error {

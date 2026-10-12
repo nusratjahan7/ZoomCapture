@@ -79,8 +79,8 @@ export interface RecordingSession {
   selectedSurface?: SelectedSurface;
   timing?: SessionTiming;
   tracks?: RecordingTrackInfo[];
-  /** Project created from this session once recording completes. */
-  projectId?: string;
+  /** Recording saved from this session once it completes. */
+  recordingId?: string;
   error?: string;
   createdAt: number;
   updatedAt: number;

@@ -108,7 +108,7 @@ export function Popup() {
           </section>
         )}
 
-        <RecentRecordings />
+        <RecentRecordings session={sessionLoaded ? session : null} />
       </main>
     </div>
   );

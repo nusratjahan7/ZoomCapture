@@ -3,8 +3,8 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
-**Status: Module 02 (recording engine) is complete.** ZoomCapture records the screen, a window or a browser tab, with the camera, microphone and tab/system audio. Recordings support pause and resume, are saved locally as real WebM files, and can be previewed, downloaded and opened in the editor.
-Module 01 (extension foundation) is unchanged and still passes its checklist.
+**Status: Module 03 (recording library and local storage) is complete.** Recordings are saved reliably on your device, with save progress, storage-full handling and recovery of interrupted saves. They appear in a library with thumbnails, where you can rename, preview, download or delete them. Everything persists across browser restarts, and nothing is ever uploaded.
+Module 01 (extension foundation) and Module 02 (recording engine) still work as before.
 
 ---
 
@@ -21,7 +21,12 @@ npm run build        # typecheck + production build → dist/
 npm run dev          # rebuild dist/ on every change (unminified, inline source maps)
 npm run typecheck    # TypeScript only
 npm run icons        # regenerate public/icons/*.png from scripts/generate-icons.mjs
+npm test             # unit tests (Vitest + fake-indexeddb): storage, saving, migrations, WebM header
+npm run test:e2e:install  # once: download Chrome for Testing into .cache/browsers
+npm run test:e2e     # build, then drive the real extension in Chrome for Testing
 ```
+
+`npm run test:e2e` uses `CHROME_PATH` if set, otherwise the Chrome for Testing installed by `test:e2e:install`. Branded Chrome no longer loads unpacked extensions from the command line, so it can't be used here.
 
 ## Load in Chrome
 
@@ -57,13 +62,13 @@ popup ──sendMessage──▶ background service worker ──writes──▶
 recording ─────────────▶  (router → sessionManager)                     │
 editor / settings ─────▶                                                 ▼
                                     every page ◀── storage.onChanged ── live session state
-pages ──▶ services/storage (IndexedDB: projects, assets, assetBlobs)
+pages ──▶ services/storage (IndexedDB: recordings, projects, assets, assetBlobs, drafts, chunks)
 ```
 
 - **Typed messaging:** `types/messages.ts` is the single contract. Each message type maps to a payload and a response type. `services/messaging.ts#sendMessage` and `background/router.ts` are both checked against it. The router only accepts messages from this extension.
 - **Single writer for session state:** only the service worker mutates the active session. Mutations are serialized, so a double-click can't create two sessions, and `SESSION_TRANSITIONS` enforces the state machine. State lives in `chrome.storage.session`, so it survives service-worker restarts. Pages subscribe through `storage.onChanged` instead of relying on broadcast messages that can be lost.
 - **Recording Studio owns the media:** the popup closes as soon as Chrome's picker takes focus, so it only launches. A dedicated tab holds the display, camera and microphone streams. Closing that tab ends the session (`tabs.onRemoved`, plus reconciliation when the worker starts).
-- **Model for future modules:** `types/project.ts` defines `Project → Timeline (tracks → clips) + ZoomMarker[] + InteractionEvent[]` and `MediaAsset`. In IndexedDB (`services/storage/db.ts`, versioned migrations), blobs sit in a separate `assetBlobs` store, so listing projects never loads video.
+- **Data model:** see [Recording library and storage](#recording-library-and-storage-module-03).
 
 ## Recording engine (Module 02)
 
@@ -113,11 +118,77 @@ What Chrome lets an extension capture depends on the source. ZoomCapture tells y
 Recordings are WebM (VP9 or VP8 video, Opus audio), which is what Chrome's MediaRecorder produces reliably on every platform. **Download** saves that file without re-encoding.
 MP4, GIF, and exports with zoom effects, camera overlay or backgrounds applied all need frames to be decoded and re-encoded (WebCodecs plus a muxer). That is the export module's job. The interface is ready in `services/export/types.ts`: implement `Exporter` and register it in `services/export/exporters.ts`. Asking for MP4 today raises `ExportUnavailableError` instead of producing a file that is wrongly labelled or empty.
 
+## Recording library and storage (Module 03)
+
+### Data model (`src/types`)
+
+| Type | What it is | Store |
+| --- | --- | --- |
+| `RecordingSession` | A live session: status state machine, capture options, timing, tracks. It's temporary: kept in `chrome.storage.session` and ends with the browser. | `chrome.storage.session` |
+| `RecordingDraft` | A recording in progress, interrupted, or partway through saving. Kept until it's saved or you discard it. | `recordingDrafts` + `recordingChunks` |
+| `Recording` | The **original** capture: name, duration, size, format, resolution, source, thumbnail, and its original media. The media is never modified after saving. | `recordings` |
+| `Project` | The **editable** layer on one recording: timeline tracks and clips, zoom settings and markers, camera layout, subtitles, imported assets (music, images), export settings. Editing never touches the original. | `projects` |
+| `MediaAsset` | Metadata for one stored Blob. `origin` is `recording` (original), `generated` (thumbnail) or `import` (added to a project). | `assets` (metadata) + `assetBlobs` (bytes) |
+
+Ids are `rec_`, `prj_` and `ast_` followed by a random UUID. Records are written with `add()`, so an id collision fails instead of overwriting an existing recording. Media is stored as Blobs in IndexedDB, never in `chrome.storage` (local or sync). Listing recordings reads only small metadata records.
+
+### Schema versions and migrations (`services/storage/migrations.ts`)
+
+Each schema version is one step that is never edited after release. Steps run inside the single upgrade transaction, so an upgrade either completes or leaves the old database as it was.
+
+| Version | Change |
+| --- | --- |
+| v1 | `projects`, `assets`, `assetBlobs` (Module 01) |
+| v2 | `recordingDrafts`, `recordingChunks` (Module 02) |
+| v3 | `recordings` store; each v2 project is split into a `Recording` plus an editable `Project`; assets get `origin` and `recordingId`; new indexes (Module 03) |
+
+A project without playable media is left untouched rather than guessed at. `Project.schemaVersion` versions the project data itself, for future in-record upgrades.
+
+### Saving that survives interruptions and full disks
+
+`finalizeDraft()` turns a draft into a Recording and Project in resumable steps:
+
+1. The recording and project ids are reserved in the draft, so a resumed save produces the same recording.
+2. Each track (screen, camera, microphone, system audio) is converted in **its own transaction**. That transaction stores the asset and blob, deletes the chunks it replaces, and marks the track as done in the draft. A save never needs more extra disk space than one track, and finished tracks are never redone.
+3. A final transaction adds the Recording and Project and deletes the draft.
+
+Every write goes through `withTransaction()`, which aborts on any error, including a request that throws synchronously, so no transaction ever commits halfway. If the browser closes, the tab crashes or the disk fills up at any point, the data stays consistent and the save can be resumed:
+
+- **Disk full** (`QuotaExceededError` → `StorageFullError`): the studio shows *Not enough storage to save the recording*, says nothing was deleted, and offers **Retry saving** and **Open library**. Retrying continues where the last attempt stopped.
+- **Tab or browser closed mid-save:** the background service worker finalizes when the studio tab closes. Anything still unsaved appears under **Unfinished recordings** in the library (and as a notice in the popup), with **Recover** (showing progress) and **Discard** (with confirmation).
+- **Low space before recording:** a warning appears when less than 1 GB is available.
+- **Persistent storage** is requested so the browser doesn't evict recordings under storage pressure; Settings → Storage shows whether it was granted.
+- **ZoomCapture never deletes a recording, draft or chunk on its own to free space.** Deleting always needs your confirmation. Chunks are only removed after their data has been saved somewhere else.
+
+### Library features
+
+- **Library** (editor home): a thumbnail with duration, plus name, creation date and size for each recording, newest first, with totals at the top. Each recording offers **Preview**, **Rename**, **Download** and **Delete**. The popup shows the three most recent, with thumbnails.
+- **Thumbnails** come from the saved video (a frame at about 1 s). Recordings saved by the service worker, which has no DOM, get one the first time they're displayed.
+- **Rename:** trims and collapses whitespace, rejects empty names and names over 120 characters, and is saved in a read-modify-write transaction.
+- **Preview:** plays in a dialog. Its temporary `blob:` URL is revoked when the dialog closes. Every page loads media through `useAssetUrl`, which revokes the URL when the asset changes or the view unmounts, and generated thumbnails revoke theirs right away. Downloads revoke their URL after the browser has read the file.
+- **Download:** the original WebM, named after the recording. Characters that are invalid in file names are replaced. Separate tracks can be downloaded from the editor.
+- **Delete:** a confirmation dialog, then one transaction removes the recording, its project, every asset and every blob.
+- **Live updates:** saving, renaming, deleting and recovering broadcast on a `BroadcastChannel`, so an open library, popup or Settings page refreshes immediately.
+- **Notifications:** success toasts for saving, renaming, recovering, deleting and starting a download. Errors say what happened and that nothing was deleted, and offer a retry where one makes sense.
+
+### Tests
+
+| Suite | Covers |
+| --- | --- |
+| `tests/unit/recordingStorage.test.ts` | Saving (records, assets, blobs, project defaults, progress), unique ids and never overwriting, reopening the database, rename validation and failure, atomic delete, download naming and errors, disk full during saving, resuming a partial save, failed final commit, discarding a partial save, thumbnail failure. |
+| `tests/unit/migrations.test.ts` | Fresh install schema; upgrading a real v2 database with projects, assets and blobs. |
+| `tests/unit/webmDuration.test.ts` | Inserting or updating Duration, TimecodeScale, sized segments, media data preserved byte for byte, unknown data left untouched. |
+| `tests/unit/storageErrors.test.ts` | Recognising quota errors however they surface; user-facing messages. |
+| `tests/e2e/run.mjs` | In real Chrome: record, then save with progress and a thumbnail → rename (including validation) → **close and reopen the browser** → library still shows everything → preview (object URL revoked) → download (`E2E demo.webm`) → delete (cancel, then confirm; every row removed) → disk full: error, nothing lost, Retry saving → disk full, quit, reopen, Recover from the library. |
+
 ## Folder structure
 
 ```
 ZoomCapture/
-├── package.json, tsconfig.json, vite.config.ts, .gitignore
+├── package.json, tsconfig.json, vite.config.ts, vitest.config.ts, .gitignore
+├── tests/
+│   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors
+│   └── e2e/{run,lib}.mjs       # Puppeteer + Chrome for Testing against dist/
 ├── public/                     # copied verbatim into dist/
 │   ├── manifest.json           # Manifest V3
 │   └── icons/icon-{16,32,48,128}.png
@@ -134,28 +205,32 @@ ZoomCapture/
     ├── recording/              # Recording Studio page
     │   ├── RecordingPage.tsx
     │   ├── components/{SourcePreview,RecordingControls,CameraBubble,FloatingControls,
-    │   │               RecordingResult,DevicePanels,MicLevelMeter,StreamVideo}.tsx
+    │   │               RecordingResult,SavingProgress,DevicePanels,MicLevelMeter,StreamVideo}.tsx
     │   └── hooks/{useRecordingFlow,useDisplayCapture,useUserMediaStream,useDocumentPip,useStudioCommands}.ts
-    ├── editor/                 # project library + project workspace
-    │   ├── EditorPage.tsx
-    │   └── components/{ProjectLibrary,ProjectWorkspace,TimelineView,RecoverableRecordings,EditorHeader}.tsx
+    ├── editor/                 # recording library + recording workspace
+    │   ├── EditorPage.tsx      # ?recording=<id> (older ?project=<id> links still work)
+    │   └── components/{RecordingLibrary,RecordingWorkspace,TimelineView,RecoverableRecordings,EditorHeader}.tsx
     ├── settings/SettingsPage.tsx   # options page
     ├── shared/
     │   ├── components/         # Button, IconButton, Toggle, Tooltip, Dialog/ConfirmDialog,
-    │   │                       # Toast, SegmentedControl, Select, Panel, EmptyState, StatusBadge, Logo
-    │   ├── hooks/              # useSettings, useActiveSession, useProjects, useMediaDevices
+    │   │                       # Toast, SegmentedControl, Select, Panel, EmptyState, StatusBadge, Logo,
+    │   │                       # TextField, ProgressBar, RecordingThumbnail, RenameDialog, PreviewDialog
+    │   ├── hooks/              # useSettings, useActiveSession, useRecordings, useRecordingActions,
+    │   │                       # useAssetUrl, useMediaDevices
     │   ├── sessionTiming.ts    # elapsed time of a session (popup timer)
     │   ├── captureSources.ts
     │   └── mountPage.tsx       # root render + providers
     ├── services/
     │   ├── messaging.ts, settings.ts, sessionState.ts, navigation.ts
-    │   ├── media/{displayCapture,userMedia,audioLevel}.ts
+    │   ├── media/{displayCapture,userMedia,audioLevel,thumbnail}.ts
     │   ├── recording/          # RecordingController, TrackRecorder, RecordingClock, audioMixer,
     │   │                       # mimeTypes, webmDuration, finalizeRecording
     │   ├── export/             # Exporter interface, original-file exporter, download helper
-    │   └── storage/{db,projectRepository,assetRepository,recordingDraftRepository}.ts
-    ├── types/                  # session, project/timeline, recording drafts, settings, messages
-    ├── utils/                  # cn, id, format, errors
+    │   └── storage/            # db (schema), migrations, recordingRepository, projectRepository,
+    │                           # projectDefaults, assetRepository, recordingDraftRepository,
+    │                           # libraryEvents, storageStatus
+    ├── types/                  # session, recording (+ drafts), project, settings, messages
+    ├── utils/                  # cn, id, format, errors, storageErrors
     └── styles/globals.css      # Tailwind v4 + design tokens
 ```
 
@@ -250,3 +325,30 @@ Use real devices, because Chrome's `--use-fake-device-for-media-stream` camera c
 - [ ] Close the studio tab during recording. Chrome asks to confirm; confirm. The recording still appears in the library, saved by the background.
 - [ ] Kill the browser process during recording, then reopen Chrome and the editor. **Unfinished recordings** offers Recover and Discard, and Recover produces a playable project.
 - [ ] After a recording finishes, Chrome's camera, microphone and sharing indicators are all gone.
+
+---
+
+## Module 03 test checklist
+
+Automated: `npm test` (36 unit tests) and `npm run test:e2e` (9 end-to-end tests). Manual checks on a real device:
+
+**Saving**
+- [ ] After **Stop**, a "Saving your recording" screen shows a progress bar, then "Recording saved" with a success notification.
+- [ ] The recording appears in the library and the popup, with a thumbnail, name, duration, creation date and size.
+- [ ] Record two clips back to back. Both have different ids and names, and neither overwrites the other.
+
+**Reopening**
+- [ ] Quit Chrome completely, reopen it, then open the library. Every recording, with its name, date, size, thumbnail and edits, is still there and plays.
+
+**Rename / preview / download / delete**
+- [ ] Rename from the library, the editor and the result screen. An empty name shows "Enter a name for the recording."; long names are limited to 120 characters. The new name appears everywhere, including other open pages.
+- [ ] **Preview** plays the recording in a dialog, and closing it stops playback.
+- [ ] **Download** saves `<name>.webm`, which plays in Chrome and VLC. Characters such as `/:*?` in the name are replaced in the file name.
+- [ ] **Delete** asks for confirmation. **Cancel** keeps the recording; confirming removes it, and Settings → Storage shows the space freed.
+
+**Storage failures and recovery**
+- [ ] Fill the disk until less than 1 GB is free, then start recording. A "Storage is running low" warning appears.
+- [ ] Record until the disk is full. Recording stops, and the studio shows "Not enough storage to save the recording", says nothing was deleted, and offers **Retry saving**. Free some space, click **Retry saving**, and the recording is saved.
+- [ ] Close Chrome while that error is showing, then reopen it. The popup shows "1 unfinished recording can be recovered", and the library offers **Recover** (with progress) and **Discard** (with confirmation).
+- [ ] Kill the Chrome process during **Saving…**. After reopening, the recording is either in the library or under Unfinished recordings, never half-saved and never lost.
+- [ ] Settings → Storage shows recordings, unfinished drafts, space used and available, and whether persistent storage is on.

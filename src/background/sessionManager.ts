@@ -13,7 +13,7 @@ import {
   type SessionTiming,
   type StudioCommand,
 } from '@/types';
-import { getErrorMessage } from '@/utils/errors';
+import { describeStorageError } from '@/utils/storageErrors';
 import { createId } from '@/utils/id';
 import { focusTab, openExtensionPage, tabExists } from './pages';
 
@@ -133,10 +133,10 @@ export function setSessionTracks(sessionId: string, tracks: RecordingTrackInfo[]
   });
 }
 
-export function completeSession(sessionId: string, projectId: string): Promise<null> {
+export function completeSession(sessionId: string, recordingId: string): Promise<null> {
   return serialize(async () => {
     const session = await requireSession(sessionId);
-    await persist({ ...transition(session, 'completed'), projectId });
+    await persist({ ...transition(session, 'completed'), recordingId });
     return null;
   });
 }
@@ -184,12 +184,12 @@ export function handleTabClosed(tabId: number): Promise<void> {
     if (session.status === 'recording' || session.status === 'paused' || session.status === 'finalizing') {
       const finalizing = await persist(transition(closed, 'finalizing', closed.error));
       try {
-        const project = await finalizeDraft(session.id);
-        await persist(
-          project ? { ...transition(finalizing, 'completed'), projectId: project.id } : transition(finalizing, 'error', closed.error),
-        );
+        // Thumbnails need a DOM; the library generates one later for recordings saved here.
+        const { recording } = await finalizeDraft(session.id);
+        await persist({ ...transition(finalizing, 'completed'), recordingId: recording.id });
       } catch (error) {
-        await persist(transition(finalizing, 'error', getErrorMessage(error)));
+        // The draft is kept, so the recording can be recovered from the library.
+        await persist(transition(finalizing, 'error', describeStorageError(error)));
       }
       return;
     }

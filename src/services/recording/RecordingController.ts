@@ -1,5 +1,5 @@
 import { saveDraft } from '@/services/storage/recordingDraftRepository';
-import type { CameraLayout, DraftTrack, Project, RecordingDraft, RecordingTrackInfo, RecordingTrackKind } from '@/types';
+import type { CameraLayout, CaptureSourceInfo, DraftTrack, RecordingDraft, RecordingTrackInfo, RecordingTrackKind } from '@/types';
 import { createId } from '@/utils/id';
 import { mixAudioTracks, type MixedAudio } from './audioMixer';
 import { AUDIO_BITRATE, CAMERA_BITRATE, pickMimeType, videoBitrate } from './mimeTypes';
@@ -21,7 +21,7 @@ export interface RecordingControllerOptions {
   sessionId: string;
   inputs: RecordingInputs;
   name: string;
-  source: NonNullable<Project['source']>;
+  source: CaptureSourceInfo;
   cameraLayout: CameraLayout;
   /** A source track ended by itself (sharing stopped, device unplugged…). */
   onTrackEnded: (kind: RecordingTrackKind) => void;

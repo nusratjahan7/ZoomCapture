@@ -1,15 +1,19 @@
 {
   "name": "zoomcapture",
   "private": true,
-  "version": "0.2.0",
-  "description": "ZoomCapture — professional screen recorder with automatic zoom effects (Chrome Extension, Manifest V3).",
+  "version": "0.3.0",
+  "description": "ZoomCapture \u2014 professional screen recorder with automatic zoom effects (Chrome Extension, Manifest V3).",
   "type": "module",
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "npm run typecheck && vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "icons": "node scripts/generate-icons.mjs",
-    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e:install": "npx @puppeteer/browsers install chrome@stable --path .cache/browsers",
+    "test:e2e": "npm run build && node tests/e2e/run.mjs"
   },
   "dependencies": {
     "idb": "^8.0.4",
@@ -18,14 +22,18 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@puppeteer/browsers": "^3.2.4",
     "@tailwindcss/vite": "^4.3.3",
     "@types/chrome": "^0.3.5",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "fake-indexeddb": "^6.2.5",
+    "puppeteer-core": "^25.13.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "vitest": "^5.0.3"
   }
 }

@@ -1,29 +1,37 @@
-import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import type { MediaAsset, Project, RecordingChunk, RecordingDraft } from '@/types';
+import { openDB, type DBSchema, type IDBPDatabase, type IDBPTransaction, type StoreNames } from 'idb';
+import type { MediaAsset, Project, Recording, RecordingChunk, RecordingDraft } from '@/types';
+import { runMigrations } from './migrations';
 
 export const DB_NAME = 'zoomcapture';
-export const DB_VERSION = 2;
+/** Bump together with a new step in `migrations.ts`. */
+export const DB_VERSION = 3;
 
 /**
- * Local project storage. Media blobs are kept in their own store so that listing projects
- * or asset metadata never loads video data into memory.
+ * Local storage for recordings. Small records (recordings, projects, asset metadata, drafts)
+ * are separate from media bytes (`assetBlobs`, `recordingChunks`), so listing never loads video.
+ * Nothing here is synced to the cloud: chrome.storage.sync is never used for media.
  */
 export interface ZoomCaptureDB extends DBSchema {
+  recordings: {
+    key: string;
+    value: Recording;
+    indexes: { 'by-created': number };
+  };
   projects: {
     key: string;
     value: Project;
-    indexes: { 'by-updated': number };
+    indexes: { 'by-updated': number; 'by-recording': string };
   };
   assets: {
     key: string;
     value: MediaAsset;
-    indexes: { 'by-project': string };
+    indexes: { 'by-project': string; 'by-recording': string };
   };
   assetBlobs: {
     key: string;
     value: Blob;
   };
-  /** Recordings in progress or interrupted (see RecordingDraft). */
+  /** Recordings in progress, interrupted, or partway through saving (see RecordingDraft). */
   recordingDrafts: {
     key: string;
     value: RecordingDraft;
@@ -35,29 +43,59 @@ export interface ZoomCaptureDB extends DBSchema {
   };
 }
 
-let dbPromise: Promise<IDBPDatabase<ZoomCaptureDB>> | undefined;
+export type ZoomCaptureDatabase = IDBPDatabase<ZoomCaptureDB>;
 
-export function getDb(): Promise<IDBPDatabase<ZoomCaptureDB>> {
+let dbPromise: Promise<ZoomCaptureDatabase> | undefined;
+
+export function getDb(): Promise<ZoomCaptureDatabase> {
   dbPromise ??= openDB<ZoomCaptureDB>(DB_NAME, DB_VERSION, {
-    upgrade(db, oldVersion) {
-      // Each block migrates from one version to the next; add new blocks for future versions.
-      if (oldVersion < 1) {
-        const projects = db.createObjectStore('projects', { keyPath: 'id' });
-        projects.createIndex('by-updated', 'updatedAt');
-        const assets = db.createObjectStore('assets', { keyPath: 'id' });
-        assets.createIndex('by-project', 'projectId');
-        db.createObjectStore('assetBlobs');
-      }
-      if (oldVersion < 2) {
-        db.createObjectStore('recordingDrafts', { keyPath: 'id' });
-        db.createObjectStore('recordingChunks', { keyPath: ['draftId', 'trackId', 'seq'] });
-      }
+    upgrade(db, oldVersion, _newVersion, transaction) {
+      return runMigrations(db, oldVersion, transaction);
     },
     blocking() {
       // A newer version was opened in another extension page; release so it can upgrade.
-      void dbPromise?.then((db) => db.close());
+      void closeDb();
+    },
+    terminated() {
+      // The browser closed the connection (e.g. storage cleared); reopen on next use.
       dbPromise = undefined;
     },
+  }).catch((error: unknown) => {
+    dbPromise = undefined;
+    throw error;
   });
   return dbPromise;
+}
+
+/**
+ * Runs `body` inside one transaction and waits for it to commit. If `body` throws (including a
+ * synchronous error from a request), the transaction is aborted, so it never commits partially.
+ */
+export async function withTransaction<Names extends StoreNames<ZoomCaptureDB>, Mode extends IDBTransactionMode, T>(
+  storeNames: Names[],
+  mode: Mode,
+  body: (tx: IDBPTransaction<ZoomCaptureDB, Names[], Mode>) => Promise<T>,
+): Promise<T> {
+  const db = await getDb();
+  const tx = db.transaction(storeNames, mode);
+  try {
+    const result = await body(tx);
+    await tx.done;
+    return result;
+  } catch (error) {
+    tx.done.catch(() => undefined); // aborting rejects `done`; the original error is what matters
+    try {
+      tx.abort();
+    } catch {
+      // Already finished or aborted by the browser.
+    }
+    throw error;
+  }
+}
+
+/** Closes the shared connection (next `getDb()` reopens it). */
+export async function closeDb(): Promise<void> {
+  const pending = dbPromise;
+  dbPromise = undefined;
+  (await pending?.catch(() => undefined))?.close();
 }
