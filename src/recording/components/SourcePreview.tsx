@@ -1,30 +1,65 @@
-import { AppWindow, Monitor, MonitorUp, PanelTop, RefreshCw, Square, Volume2, VolumeX } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { AppWindow, Monitor, MonitorUp, PanelTop, Volume2, VolumeX } from 'lucide-react';
 import { CAPTURE_SOURCE_NOUN } from '@/shared/captureSources';
 import { Button, EmptyState, Panel } from '@/shared/components';
 import type { CaptureSource, SelectedSurface } from '@/types';
+import { cn } from '@/utils/cn';
 import { StreamVideo } from './StreamVideo';
 
 const SURFACE_ICONS = { monitor: Monitor, window: AppWindow, browser: PanelTop, unknown: Monitor };
 const SURFACE_NAMES = { monitor: 'Screen', window: 'Window', browser: 'Browser tab', unknown: 'Shared surface' };
 
+/** Explains honestly whether audio comes with the chosen surface; Chrome's support varies by source. */
+export function describeSurfaceAudio(surface: SelectedSurface, audioRequested: boolean): string {
+  if (surface.hasAudio) return surface.surface === 'browser' ? 'Tab audio included' : 'System audio included';
+  if (!audioRequested) return 'Tab/system audio is turned off';
+  if (surface.surface === 'window') return 'Chrome does not share audio from windows';
+  if (surface.surface === 'browser') return 'Tab audio was not shared in Chrome’s picker';
+  return 'System audio not shared (Chrome offers it on Windows and ChromeOS)';
+}
+
 export interface SourcePreviewProps {
   source: CaptureSource;
   stream: MediaStream | null;
   surface: SelectedSurface | null;
+  audioRequested: boolean;
   selecting: boolean;
   disabled: boolean;
+  recording: boolean;
   onSelect: () => void;
-  onStop: () => void;
+  /** Rendered over the video (camera bubble, countdown). */
+  overlay?: ReactNode;
+  /** Transport controls. */
+  footer?: ReactNode;
 }
 
-export function SourcePreview({ source, stream, surface, selecting, disabled, onSelect, onStop }: SourcePreviewProps) {
+export function SourcePreview({
+  source,
+  stream,
+  surface,
+  audioRequested,
+  selecting,
+  disabled,
+  recording,
+  onSelect,
+  overlay,
+  footer,
+}: SourcePreviewProps) {
   const SurfaceIcon = surface ? SURFACE_ICONS[surface.surface] : Monitor;
 
   return (
     <Panel className="p-3">
-      <div className="relative aspect-video overflow-hidden rounded-xl border border-line bg-black/60">
+      <div
+        className={cn(
+          'relative aspect-video overflow-hidden rounded-xl border bg-black/60 transition-colors',
+          recording ? 'border-rec/70 shadow-[0_0_0_1px] shadow-rec/40' : 'border-line',
+        )}
+      >
         {stream ? (
-          <StreamVideo stream={stream} label="Live preview of the shared surface" />
+          <>
+            <StreamVideo stream={stream} label="Live preview of the shared surface" />
+            {overlay}
+          </>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-[radial-gradient(ellipse_at_center,var(--color-surface-2),var(--color-canvas))]">
             <EmptyState
@@ -42,8 +77,8 @@ export function SourcePreview({ source, stream, surface, selecting, disabled, on
       </div>
 
       {surface && (
-        <div className="mt-3 flex flex-wrap items-center gap-3 px-1">
-          <span className="flex size-9 items-center justify-center rounded-lg bg-surface-3 text-accent-2">
+        <div className="mt-3 flex items-center gap-3 px-1">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-surface-3 text-accent-2">
             <SurfaceIcon size={16} aria-hidden />
           </span>
           <div className="min-w-0 flex-1">
@@ -60,18 +95,14 @@ export function SourcePreview({ source, stream, surface, selecting, disabled, on
               {surface.frameRate && <span>· {surface.frameRate} fps</span>}
               <span className="inline-flex items-center gap-1">
                 · {surface.hasAudio ? <Volume2 size={12} aria-hidden /> : <VolumeX size={12} aria-hidden />}
-                {surface.hasAudio ? 'Audio shared' : 'No audio'}
+                {describeSurfaceAudio(surface, audioRequested)}
               </span>
             </p>
           </div>
-          <Button size="sm" icon={RefreshCw} loading={selecting} disabled={disabled} onClick={onSelect}>
-            Change source
-          </Button>
-          <Button size="sm" variant="danger" icon={Square} onClick={onStop}>
-            Stop sharing
-          </Button>
         </div>
       )}
+
+      {footer && <div className="mt-3 border-t border-line px-1 pt-3">{footer}</div>}
     </Panel>
   );
 }

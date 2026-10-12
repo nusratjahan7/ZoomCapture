@@ -1,15 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { FolderOpen, KeyRound, Mic, RotateCcw, Video, Volume2 } from 'lucide-react';
+import { FolderOpen, KeyRound, Mic, PictureInPicture2, RotateCcw, Video, Volume2 } from 'lucide-react';
 import { sendMessage } from '@/services/messaging';
 import { resetSettings } from '@/services/settings';
 import { countProjects } from '@/services/storage/projectRepository';
 import { CAPTURE_SOURCE_OPTIONS } from '@/shared/captureSources';
 import { Button, ConfirmDialog, Logo, Panel, SegmentedControl, Select, Toggle, useToast } from '@/shared/components';
 import { useSettings } from '@/shared/hooks/useSettings';
-import type { CaptureFrameRate, CaptureResolution } from '@/types';
+import type { CaptureFrameRate, CaptureResolution, CountdownSeconds } from '@/types';
 import { describeMediaError, getErrorMessage } from '@/utils/errors';
 import { formatBytes } from '@/utils/format';
-import { useMediaDevices } from './useMediaDevices';
+import { useMediaDevices } from '@/shared/hooks/useMediaDevices';
 
 const RESOLUTION_OPTIONS: Array<{ value: CaptureResolution; label: string }> = [
   { value: '1080p', label: 'Up to 1080p (1920×1080)' },
@@ -17,6 +17,12 @@ const RESOLUTION_OPTIONS: Array<{ value: CaptureResolution; label: string }> = [
   { value: '2160p', label: 'Up to 4K (3840×2160)' },
   { value: 'native', label: 'Native resolution' },
 ];
+
+const COUNTDOWN_OPTIONS = [
+  { value: 0, label: 'Off' },
+  { value: 3, label: '3 seconds' },
+  { value: 5, label: '5 seconds' },
+] as const;
 
 const FRAME_RATE_OPTIONS = [
   { value: 30, label: '30 fps' },
@@ -131,6 +137,26 @@ export function SettingsPage() {
                   description="Lets Chrome offer to share audio along with the selected source."
                   checked={settings.captureSystemAudio}
                   onCheckedChange={(captureSystemAudio) => save({ captureSystemAudio })}
+                />
+              </div>
+            </Panel>
+
+            <Panel title="Recording" description="How recording starts and how you control it.">
+              <div className="space-y-5">
+                <Field label="Countdown" description="Time to get ready after pressing Start recording.">
+                  <SegmentedControl
+                    label="Countdown"
+                    options={COUNTDOWN_OPTIONS}
+                    value={settings.countdownSeconds}
+                    onChange={(countdownSeconds: CountdownSeconds) => save({ countdownSeconds })}
+                  />
+                </Field>
+                <Toggle
+                  icon={PictureInPicture2}
+                  label="Floating camera bubble and controls"
+                  description="An always-on-top window you can move anywhere. It is visible in recordings of your entire screen."
+                  checked={settings.floatingControls}
+                  onCheckedChange={(floatingControls) => save({ floatingControls })}
                 />
               </div>
             </Panel>

@@ -3,10 +3,13 @@ import { getErrorMessage } from '@/utils/errors';
 import { openExtensionPage } from './pages';
 import {
   cancelSession,
+  completeSession,
+  controlRecording,
   getActiveSession,
   setSessionOptions,
   setSessionStatus,
   setSessionSurface,
+  setSessionTracks,
   startSession,
 } from './sessionManager';
 
@@ -16,12 +19,15 @@ type Handler<T extends MessageType> = (
 ) => Promise<MessageMap[T]['response']>;
 
 const handlers: { [T in MessageType]: Handler<T> } = {
-  'session/start': ({ options }) => startSession(options),
+  'session/start': ({ options, inPlace }, sender) => startSession(options, inPlace ? sender.tab?.id : undefined),
   'session/get-active': () => getActiveSession(),
   'session/set-options': ({ sessionId, options }) => setSessionOptions(sessionId, options),
   'session/set-status': ({ sessionId, status, error }) => setSessionStatus(sessionId, status, error),
   'session/set-surface': ({ sessionId, surface }) => setSessionSurface(sessionId, surface),
+  'session/set-tracks': ({ sessionId, tracks }) => setSessionTracks(sessionId, tracks),
+  'session/complete': ({ sessionId, projectId }) => completeSession(sessionId, projectId),
   'session/cancel': ({ sessionId }) => cancelSession(sessionId),
+  'recording/control': ({ sessionId, action }) => controlRecording(sessionId, action),
   'page/open': async ({ page, params }) => {
     // The options page has its own API that already reuses an open settings tab.
     if (page === 'settings') await chrome.runtime.openOptionsPage();

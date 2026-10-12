@@ -1,12 +1,19 @@
+import { finalizeDraft } from '@/services/recording/finalizeRecording';
 import { ACTIVE_SESSION_KEY, readActiveSession } from '@/services/sessionState';
 import {
   SESSION_TRANSITIONS,
   TERMINAL_SESSION_STATUSES,
   type CaptureOptions,
+  type MessageResult,
+  type RecordingAction,
   type RecordingSession,
+  type RecordingTrackInfo,
   type SelectedSurface,
   type SessionStatus,
+  type SessionTiming,
+  type StudioCommand,
 } from '@/types';
+import { getErrorMessage } from '@/utils/errors';
 import { createId } from '@/utils/id';
 import { focusTab, openExtensionPage, tabExists } from './pages';
 
@@ -35,9 +42,14 @@ async function persist(session: RecordingSession): Promise<RecordingSession> {
 }
 
 async function syncBadge(session: RecordingSession): Promise<void> {
-  const live = session.status === 'recording' || session.status === 'paused';
-  await chrome.action.setBadgeBackgroundColor({ color: '#FF4D5E' });
-  await chrome.action.setBadgeText({ text: live ? 'REC' : '' });
+  const badge =
+    session.status === 'recording'
+      ? { text: 'REC', color: '#FF4D5E' }
+      : session.status === 'paused'
+        ? { text: '❚❚', color: '#B7791F' }
+        : { text: '', color: '#FF4D5E' };
+  await chrome.action.setBadgeBackgroundColor({ color: badge.color });
+  await chrome.action.setBadgeText({ text: badge.text });
 }
 
 async function requireSession(sessionId: string): Promise<RecordingSession> {
@@ -46,18 +58,36 @@ async function requireSession(sessionId: string): Promise<RecordingSession> {
   return session;
 }
 
+/** Wall-clock timing for the popup timer. The studio's own clock is authoritative for media. */
+function nextTiming(timing: SessionTiming | undefined, status: SessionStatus, now: number): SessionTiming | undefined {
+  if (status === 'recording') {
+    if (!timing) return { startedAt: now, pausedMs: 0 };
+    if (timing.pausedAt !== undefined) return { ...timing, pausedMs: timing.pausedMs + now - timing.pausedAt, pausedAt: undefined };
+    return timing;
+  }
+  // Freeze the elapsed time while paused and once recording has ended.
+  if (timing && timing.pausedAt === undefined && (status === 'paused' || status === 'finalizing' || isTerminal(status))) {
+    return { ...timing, pausedAt: now };
+  }
+  return timing;
+}
+
 function transition(session: RecordingSession, status: SessionStatus, error?: string): RecordingSession {
   if (session.status === status) return session;
   if (!SESSION_TRANSITIONS[session.status].includes(status)) {
     throw new Error(`Invalid session transition: ${session.status} → ${status}.`);
   }
-  return { ...session, status, error, updatedAt: Date.now() };
+  const now = Date.now();
+  return { ...session, status, error, timing: nextTiming(session.timing, status, now), updatedAt: now };
 }
 
 export const getActiveSession = readActiveSession;
 
-/** Creates a session and opens the recording page, or focuses the session already in progress. */
-export function startSession(options: CaptureOptions): Promise<RecordingSession> {
+/**
+ * Creates a session and opens the recording page, or focuses the session already in progress.
+ * With `inPlaceTabId`, the calling studio tab hosts the new session instead of opening another tab.
+ */
+export function startSession(options: CaptureOptions, inPlaceTabId?: number): Promise<RecordingSession> {
   return serialize(async () => {
     const existing = await readActiveSession();
     if (existing?.recordingTabId !== undefined && (await tabExists(existing.recordingTabId))) {
@@ -73,8 +103,8 @@ export function startSession(options: CaptureOptions): Promise<RecordingSession>
       createdAt: now,
       updatedAt: now,
     };
-    const tab = await openExtensionPage('recording', { session: session.id });
-    return persist({ ...session, recordingTabId: tab.id });
+    const tabId = inPlaceTabId ?? (await openExtensionPage('recording', { session: session.id })).id;
+    return persist({ ...session, recordingTabId: tabId });
   });
 }
 
@@ -96,6 +126,21 @@ export function setSessionSurface(sessionId: string, surface: SelectedSurface | 
   });
 }
 
+export function setSessionTracks(sessionId: string, tracks: RecordingTrackInfo[]): Promise<RecordingSession> {
+  return serialize(async () => {
+    const session = await requireSession(sessionId);
+    return persist({ ...session, tracks, updatedAt: Date.now() });
+  });
+}
+
+export function completeSession(sessionId: string, projectId: string): Promise<null> {
+  return serialize(async () => {
+    const session = await requireSession(sessionId);
+    await persist({ ...transition(session, 'completed'), projectId });
+    return null;
+  });
+}
+
 /** Cancels the session and closes its recording tab. */
 export function cancelSession(sessionId: string): Promise<null> {
   return serialize(async () => {
@@ -108,14 +153,47 @@ export function cancelSession(sessionId: string): Promise<null> {
   });
 }
 
-/** Ends the active session when its recording tab is closed (or vanished while the worker slept). */
+/** Forwards pause/resume/stop from the popup to the studio tab that owns the recorders. */
+export async function controlRecording(sessionId: string, action: RecordingAction): Promise<null> {
+  const session = await requireSession(sessionId);
+  const command: StudioCommand = { channel: 'studio', sessionId, action };
+  let result: MessageResult<'recording/control'> | undefined;
+  try {
+    result = await chrome.runtime.sendMessage(command);
+  } catch {
+    result = undefined;
+  }
+  if (!result) throw new Error('The Recording Studio is not responding.');
+  if (!result.ok) throw new Error(result.error);
+  // Show the saved recording once the user stops from the toolbar.
+  if (action === 'stop' && session.recordingTabId !== undefined) await focusTab(session.recordingTabId);
+  return null;
+}
+
+/**
+ * Ends the active session when its recording tab is closed (or vanished while the worker slept).
+ * A recording in progress is rescued: everything captured up to the last ~1 s chunk is
+ * finalized into a project from IndexedDB.
+ */
 export function handleTabClosed(tabId: number): Promise<void> {
   return serialize(async () => {
     const session = await readActiveSession();
     if (session?.recordingTabId !== tabId) return;
-    // Module 02 will finalize in-progress captures here; for now the session simply ends.
-    const status: SessionStatus = SESSION_TRANSITIONS[session.status].includes('cancelled') ? 'cancelled' : 'error';
-    await persist({ ...session, status, error: 'The recording tab was closed.', updatedAt: Date.now() });
+    const closed = { ...session, recordingTabId: undefined, error: 'The recording tab was closed.' };
+
+    if (session.status === 'recording' || session.status === 'paused' || session.status === 'finalizing') {
+      const finalizing = await persist(transition(closed, 'finalizing', closed.error));
+      try {
+        const project = await finalizeDraft(session.id);
+        await persist(
+          project ? { ...transition(finalizing, 'completed'), projectId: project.id } : transition(finalizing, 'error', closed.error),
+        );
+      } catch (error) {
+        await persist(transition(finalizing, 'error', getErrorMessage(error)));
+      }
+      return;
+    }
+    await persist(transition(closed, 'cancelled', closed.error));
   });
 }
 

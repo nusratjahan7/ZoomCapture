@@ -3,6 +3,7 @@
  * zoom markers and an editable timeline. All times are in milliseconds relative to the
  * start of the project timeline.
  */
+import type { SelectedSurface } from './session';
 
 export type MediaAssetKind = 'screen' | 'camera' | 'microphone' | 'system-audio' | 'image';
 
@@ -14,9 +15,28 @@ export interface MediaAsset {
   /** Size of the stored blob in bytes. */
   size: number;
   durationMs?: number;
+  /** Where this asset starts relative to the start of the recording, in recorded (unpaused) time. */
+  startOffsetMs: number;
   width?: number;
   height?: number;
+  /** Device or surface name, e.g. "FaceTime HD Camera". */
+  label?: string;
+  hasAudio?: boolean;
+  /** The source stopped before the recording did (device unplugged, tab closed…). */
+  endedEarly?: boolean;
   createdAt: number;
+}
+
+export type CameraBubbleSize = 'small' | 'medium' | 'large';
+
+/** Bubble diameter as a fraction of the frame width. */
+export const CAMERA_BUBBLE_SCALE: Record<CameraBubbleSize, number> = { small: 0.14, medium: 0.2, large: 0.28 };
+
+/** Placement of the camera bubble over the screen video. `x`/`y` is its centre, normalised 0-1. */
+export interface CameraLayout {
+  x: number;
+  y: number;
+  size: CameraBubbleSize;
 }
 
 export type ZoomEasing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'spring';
@@ -79,6 +99,9 @@ export interface Project {
   sessionId?: string;
   timeline: Timeline;
   interactions: InteractionEvent[];
+  cameraLayout?: CameraLayout;
+  /** What was captured. */
+  source?: { surface: SelectedSurface['surface']; label: string };
   createdAt: number;
   updatedAt: number;
 }
