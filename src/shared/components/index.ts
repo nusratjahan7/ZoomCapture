@@ -10,3 +10,7 @@ export * from './StatusBadge';
 export * from './Toast';
 export * from './Toggle';
 export * from './Tooltip';
+export * from './ProgressBar';
+export * from './RecordingDialogs';
+export * from './RecordingThumbnail';
+export * from './TextField';

@@ -39,7 +39,7 @@ export interface MessageMap {
     payload: { sessionId: string; tracks: RecordingTrackInfo[] };
     response: RecordingSession;
   };
-  'session/complete': { payload: { sessionId: string; projectId: string }; response: null };
+  'session/complete': { payload: { sessionId: string; recordingId: string }; response: null };
   'session/cancel': { payload: { sessionId: string }; response: null };
   /** Pause/resume/stop from outside the studio (popup). Forwarded to the studio as a StudioCommand. */
   'recording/control': { payload: { sessionId: string; action: RecordingAction }; response: null };

@@ -1,16 +1,39 @@
 /**
- * Persistent editing model. A project owns media assets (stored as blobs in IndexedDB),
- * zoom markers and an editable timeline. All times are in milliseconds relative to the
- * start of the project timeline.
+ * Storage model.
+ *
+ * - `Recording` (types/recording.ts) is what was captured: its name, its original media and facts
+ *   about it. The original media is never modified after saving.
+ * - `Project` is the editable layer on top of one recording: timeline, zoom effects, camera
+ *   placement, subtitles, music, imported assets and export settings. Editing never touches the
+ *   original recording, so a project can always be reset.
+ * - `MediaAsset` describes one stored Blob (the bytes live in the `assetBlobs` store).
+ *
+ * All times are in milliseconds relative to the start of the timeline.
  */
 import type { SelectedSurface } from './session';
 
-export type MediaAssetKind = 'screen' | 'camera' | 'microphone' | 'system-audio' | 'image';
+export type MediaAssetKind =
+  | 'screen'
+  | 'camera'
+  | 'microphone'
+  | 'system-audio'
+  | 'thumbnail'
+  /** Imported by the user into a project (future modules). */
+  | 'image'
+  | 'audio'
+  | 'video';
+
+/** `recording`: original captured media. `generated`: derived (thumbnail). `import`: added to a project. */
+export type MediaAssetOrigin = 'recording' | 'generated' | 'import';
 
 export interface MediaAsset {
   id: string;
-  projectId: string;
   kind: MediaAssetKind;
+  origin: MediaAssetOrigin;
+  /** Owner of original and generated media. */
+  recordingId?: string;
+  /** Owner of imported media. */
+  projectId?: string;
   mimeType: string;
   /** Size of the stored blob in bytes. */
   size: number;
@@ -19,7 +42,7 @@ export interface MediaAsset {
   startOffsetMs: number;
   width?: number;
   height?: number;
-  /** Device or surface name, e.g. "FaceTime HD Camera". */
+  /** Device or surface name, e.g. "FaceTime HD Camera", or the imported file name. */
   label?: string;
   hasAudio?: boolean;
   /** The source stopped before the recording did (device unplugged, tab closed…). */
@@ -55,6 +78,13 @@ export interface ZoomMarker {
   origin: 'auto' | 'manual';
 }
 
+/** Project-wide zoom behaviour. Individual effects are `Timeline.zoomMarkers`. */
+export interface ZoomSettings {
+  mode: 'auto' | 'manual' | 'off';
+  defaultScale: number;
+  easing: ZoomEasing;
+}
+
 /** A captured interaction used to generate automatic zoom markers. */
 export interface InteractionEvent {
   timeMs: number;
@@ -64,7 +94,8 @@ export interface InteractionEvent {
   y: number;
 }
 
-export type TrackKind = 'video' | 'camera' | 'audio';
+/** `music` tracks hold imported audio assets. */
+export type TrackKind = 'video' | 'camera' | 'audio' | 'music';
 
 export interface TimelineClip {
   id: string;
@@ -75,6 +106,8 @@ export interface TimelineClip {
   sourceInMs: number;
   sourceOutMs: number;
   muted?: boolean;
+  /** 0-1. */
+  volume?: number;
 }
 
 export interface TimelineTrack {
@@ -92,25 +125,54 @@ export interface Timeline {
   zoomMarkers: ZoomMarker[];
 }
 
+export interface SubtitleCue {
+  id: string;
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface SubtitleTrack {
+  id: string;
+  label: string;
+  /** BCP 47 language tag, e.g. "en". */
+  language: string;
+  cues: SubtitleCue[];
+}
+
+export type ExportFormat = 'webm' | 'mp4' | 'gif';
+
+export interface ExportSettings {
+  format: ExportFormat;
+  resolution: 'source' | '720p' | '1080p' | '1440p' | '2160p';
+  frameRate: 30 | 60;
+  quality: 'standard' | 'high';
+  includeCamera: boolean;
+  burnInSubtitles: boolean;
+}
+
+/** Bump when the Project shape changes; `services/storage/migrations.ts` upgrades older data. */
+export const PROJECT_SCHEMA_VERSION = 1;
+
 export interface Project {
   id: string;
-  name: string;
-  /** Recording session that produced this project, if any. */
-  sessionId?: string;
+  /** The original recording this project edits. */
+  recordingId: string;
+  schemaVersion: number;
   timeline: Timeline;
+  zoom: ZoomSettings;
   interactions: InteractionEvent[];
   cameraLayout?: CameraLayout;
-  /** What was captured. */
-  source?: { surface: SelectedSurface['surface']; label: string };
+  subtitles: SubtitleTrack[];
+  /** Assets the user imported into this project (images, music, video); `MediaAsset.projectId` = this id. */
+  importedAssetIds: string[];
+  exportSettings: ExportSettings;
   createdAt: number;
   updatedAt: number;
 }
 
-/** Lightweight projection used by lists (popup, library). */
-export interface ProjectSummary {
-  id: string;
-  name: string;
-  durationMs: number;
-  createdAt: number;
-  updatedAt: number;
+/** What was captured, as reported by Chrome's picker. */
+export interface CaptureSourceInfo {
+  surface: SelectedSurface['surface'];
+  label: string;
 }

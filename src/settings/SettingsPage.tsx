@@ -2,7 +2,10 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { FolderOpen, KeyRound, Mic, PictureInPicture2, RotateCcw, Video, Volume2 } from 'lucide-react';
 import { sendMessage } from '@/services/messaging';
 import { resetSettings } from '@/services/settings';
-import { countProjects } from '@/services/storage/projectRepository';
+import { subscribeLibrary } from '@/services/storage/libraryEvents';
+import { listDrafts } from '@/services/storage/recordingDraftRepository';
+import { countRecordings } from '@/services/storage/recordingRepository';
+import { getStorageStatus, requestPersistentStorage, type StorageStatus } from '@/services/storage/storageStatus';
 import { CAPTURE_SOURCE_OPTIONS } from '@/shared/captureSources';
 import { Button, ConfirmDialog, Logo, Panel, SegmentedControl, Select, Toggle, useToast } from '@/shared/components';
 import { useSettings } from '@/shared/hooks/useSettings';
@@ -47,12 +50,18 @@ function deviceOptions(devices: Array<{ deviceId: string; label: string }>, sele
   return options;
 }
 
+type StorageSummary = StorageStatus & { recordings: number; unfinished: number };
+
 function useStorageSummary() {
-  const [summary, setSummary] = useState<{ projects: number; usage?: number; quota?: number } | null>(null);
+  const [summary, setSummary] = useState<StorageSummary | null>(null);
   useEffect(() => {
-    void Promise.all([countProjects(), navigator.storage.estimate()]).then(([projects, estimate]) =>
-      setSummary({ projects, usage: estimate.usage, quota: estimate.quota }),
-    );
+    const load = async () => {
+      await requestPersistentStorage();
+      const [recordings, drafts, status] = await Promise.all([countRecordings(), listDrafts(), getStorageStatus()]);
+      setSummary({ ...status, recordings, unfinished: drafts.length });
+    };
+    void load().catch(() => setSummary({ persisted: null, recordings: 0, unfinished: 0 }));
+    return subscribeLibrary(() => void load().catch(() => undefined));
   }, []);
   return summary;
 }
@@ -213,7 +222,7 @@ export function SettingsPage() {
 
             <Panel
               title="Storage"
-              description="Projects and media are stored locally in this browser profile."
+              description="Recordings are stored only on this device, in this browser profile. Nothing is uploaded."
               actions={
                 <Button
                   size="sm"
@@ -224,21 +233,36 @@ export function SettingsPage() {
                 </Button>
               }
             >
-              <dl className="grid grid-cols-2 gap-4 text-sm">
+              <dl className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
                 <div>
-                  <dt className="text-fg-subtle">Projects</dt>
-                  <dd className="mt-1 text-lg font-semibold">{storage ? storage.projects : '–'}</dd>
+                  <dt className="text-fg-subtle">Recordings</dt>
+                  <dd className="mt-1 text-lg font-semibold">{storage ? storage.recordings : '–'}</dd>
+                </div>
+                <div>
+                  <dt className="text-fg-subtle">Unfinished</dt>
+                  <dd className="mt-1 text-lg font-semibold">{storage ? storage.unfinished : '–'}</dd>
                 </div>
                 <div>
                   <dt className="text-fg-subtle">Space used</dt>
                   <dd className="mt-1 text-lg font-semibold">
                     {storage?.usage !== undefined ? formatBytes(storage.usage) : '–'}
-                    {storage?.quota !== undefined && (
-                      <span className="ml-1 text-xs font-normal text-fg-subtle">of {formatBytes(storage.quota)}</span>
-                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-fg-subtle">Available</dt>
+                  <dd className="mt-1 text-lg font-semibold">
+                    {storage?.usage !== undefined && storage.quota !== undefined
+                      ? formatBytes(Math.max(0, storage.quota - storage.usage))
+                      : '–'}
                   </dd>
                 </div>
               </dl>
+              <p className="mt-4 text-xs text-fg-subtle">
+                {storage?.persisted
+                  ? 'Persistent storage is on: the browser will not clear recordings to free space.'
+                  : 'The browser may clear site data under severe storage pressure; download recordings you want to keep.'}{' '}
+                ZoomCapture itself never deletes recordings unless you ask it to.
+              </p>
             </Panel>
 
             <div className="flex justify-end">

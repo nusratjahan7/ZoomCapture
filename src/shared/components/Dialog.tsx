@@ -10,6 +10,8 @@ export interface DialogProps {
   description?: string;
   children?: ReactNode;
   footer?: ReactNode;
+  /** `lg` fits media previews. */
+  size?: 'md' | 'lg';
   className?: string;
 }
 
@@ -17,7 +19,7 @@ export interface DialogProps {
  * Modal dialog built on the native `<dialog>` element, which provides focus trapping,
  * Escape-to-close, inert background and top-layer rendering. Clicking the backdrop closes it.
  */
-export function Dialog({ open, onClose, title, description, children, footer, className }: DialogProps) {
+export function Dialog({ open, onClose, title, description, children, footer, size = 'md', className }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const descriptionId = useId();
@@ -39,8 +41,9 @@ export function Dialog({ open, onClose, title, description, children, footer, cl
         if (event.target === ref.current) onClose();
       }}
       className={cn(
-        'm-auto w-[min(92vw,420px)] rounded-2xl border border-line-strong bg-surface p-0 text-fg shadow-elevated',
+        'm-auto rounded-2xl border border-line-strong bg-surface p-0 text-fg shadow-elevated',
         'open:animate-fade-in',
+        size === 'lg' ? 'w-[min(94vw,960px)]' : 'w-[min(92vw,420px)]',
         className,
       )}
     >

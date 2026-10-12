@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CircleOff, FolderOpen, Settings, TriangleAlert, Volume2, X } from 'lucide-react';
+import { CircleOff, FolderOpen, RotateCcw, Settings, TriangleAlert, Volume2, X } from 'lucide-react';
 import { sendMessage } from '@/services/messaging';
 import { requestCameraStream, requestMicrophoneStream } from '@/services/media/userMedia';
 import { getQueryParam } from '@/services/navigation';
 import { findSupportedMimeType } from '@/services/recording/mimeTypes';
+import { availableSpace, LOW_SPACE_BYTES, requestPersistentStorage } from '@/services/storage/storageStatus';
+import { formatBytes } from '@/utils/format';
 import { CAPTURE_SOURCE_OPTIONS } from '@/shared/captureSources';
 import {
   Button,
@@ -28,6 +30,7 @@ import { DevicePanel } from './components/DevicePanels';
 import { FLOATING_SIZE, FloatingControls } from './components/FloatingControls';
 import { RecordingControls } from './components/RecordingControls';
 import { RecordingResult } from './components/RecordingResult';
+import { SavingProgress } from './components/SavingProgress';
 import { SourcePreview } from './components/SourcePreview';
 import { useDisplayCapture } from './hooks/useDisplayCapture';
 import { useDocumentPip } from './hooks/useDocumentPip';
@@ -117,6 +120,7 @@ export function RecordingPage() {
         display.stop();
         pip.close();
       },
+      onSaved: () => toast.show({ variant: 'success', title: 'Recording saved', description: 'It is stored on this device.' }),
     },
   );
   phaseRef.current = flow.phase;
@@ -182,7 +186,21 @@ export function RecordingPage() {
     // Picture-in-Picture needs the click's user activation, so it opens here, before the countdown.
     if (settings?.floatingControls && pip.supported) openFloatingControls();
     flow.start();
+    void availableSpace().then((free) => {
+      if (free !== undefined && free < LOW_SPACE_BYTES) {
+        toast.show({
+          variant: 'error',
+          title: 'Storage is running low',
+          description: `About ${formatBytes(free)} left. Recording continues; if space runs out, everything captured so far is kept.`,
+        });
+      }
+    });
   };
+
+  // Ask the browser to keep recordings even under storage pressure (granted silently for extensions).
+  useEffect(() => {
+    void requestPersistentStorage();
+  }, []);
 
   const cancelCountdown = () => {
     flow.cancelCountdown();
@@ -242,23 +260,27 @@ export function RecordingPage() {
     );
 
   let content;
-  if (flow.phase === 'done' && flow.projectId) {
-    content = <RecordingResult projectId={flow.projectId} onRecordAgain={() => void startNewSession()} />;
+  if (flow.phase === 'done' && flow.recordingId) {
+    content = <RecordingResult recordingId={flow.recordingId} onRecordAgain={() => void startNewSession()} />;
+  } else if (flow.phase === 'saving') {
+    content = <SavingProgress progress={flow.saveProgress} />;
   } else if (flow.phase === 'failed') {
     content = (
       <main className="flex flex-1 items-center justify-center p-6">
         <EmptyState
           icon={TriangleAlert}
-          title="The recording could not be saved"
-          description={`${flow.failure ?? 'Unknown error'} Any captured media is kept and can be recovered from the project library.`}
+          title={flow.failure?.storageFull ? 'Not enough storage to save the recording' : 'The recording could not be saved'}
+          description={`${flow.failure?.message ?? 'Unknown error.'} Your captured media is kept safely until it is saved or you discard it in the library.`}
           action={
-            <div className="flex gap-2">
+            <div className="flex flex-wrap justify-center gap-2">
               <Button icon={FolderOpen} onClick={() => void sendMessage('page/open', { page: 'editor' })}>
                 Open library
               </Button>
-              <Button variant="primary" onClick={() => void startNewSession()}>
-                Record again
-              </Button>
+              {flow.failure?.draftId && (
+                <Button variant="primary" icon={RotateCcw} onClick={flow.retrySave}>
+                  Retry saving
+                </Button>
+              )}
             </div>
           }
         />

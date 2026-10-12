@@ -1,13 +1,14 @@
-import { AudioLines, Rows3, Video, Webcam, ZoomIn } from 'lucide-react';
+import { AudioLines, Music, Rows3, Video, Webcam, ZoomIn } from 'lucide-react';
 import { EmptyState, Panel } from '@/shared/components';
 import type { Timeline, TrackKind } from '@/types';
 import { formatDuration } from '@/utils/format';
 
-const TRACK_ICONS: Record<TrackKind, typeof Video> = { video: Video, camera: Webcam, audio: AudioLines };
+const TRACK_ICONS: Record<TrackKind, typeof Video> = { video: Video, camera: Webcam, audio: AudioLines, music: Music };
 const TRACK_COLORS: Record<TrackKind, string> = {
   video: 'bg-accent/30 border-accent/60',
   camera: 'bg-accent-2/20 border-accent-2/50',
   audio: 'bg-success/20 border-success/50',
+  music: 'bg-warning/20 border-warning/50',
 };
 
 /** Read-only rendering of the timeline model. Editing interactions come with the editor module. */
