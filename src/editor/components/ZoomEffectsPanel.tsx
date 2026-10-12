@@ -78,7 +78,7 @@ export function ZoomEffectsPanel(props: ZoomEffectsPanelProps) {
                       {formatTime(marker.timeMs)} · {marker.effect === 'zoom' ? `${marker.scale.toFixed(1)}×` : 'Highlight'}
                     </span>
                     <span className="flex items-center gap-1.5 truncate text-xs text-fg-subtle">
-                      {marker.positionMode === 'follow-cursor' && <MousePointer2 size={11} aria-label="Follows clicks" />}
+                      {marker.positionMode === 'follow-cursor' && <MousePointer2 size={11} aria-label="Follows the cursor" />}
                       {(marker.durationMs / 1000).toFixed(1)} s · {marker.origin === 'auto' ? 'from click' : 'manual'}
                       {marker.annotation && ` · “${marker.annotation}”`}
                     </span>

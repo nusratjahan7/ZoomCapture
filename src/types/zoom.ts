@@ -14,7 +14,10 @@ export type ZoomEasing = 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'sp
 /** `zoom` magnifies around the position; `highlight` draws attention without magnifying. */
 export type ZoomEffectType = 'zoom' | 'highlight';
 
-/** `fixed` stays on `position`; `follow-cursor` pans to later clicks inside the marker. */
+/**
+ * `fixed` stays on `position`. `follow-cursor` pans smoothly with the pointer during the hold (or
+ * to each later click, for recordings made before pointer movement was tracked).
+ */
 export type ZoomPositionMode = 'fixed' | 'follow-cursor';
 
 export interface ZoomMarker {
@@ -83,6 +86,26 @@ export interface InteractionEvent {
   button: number;
   /** CSS-pixel size of the captured viewport when it happened. */
   viewport: { width: number; height: number };
+}
+
+/**
+ * Pointer position in the recorded tab, sampled while it moves (at most ~30 per second) during
+ * recording. Stored with the original recording; used for follow-cursor zoom and the cursor
+ * highlight. `hidden` marks the pointer leaving the page.
+ */
+export interface CursorSample {
+  timeMs: number;
+  x: number;
+  y: number;
+  hidden?: true;
+}
+
+/** Cursor and click overlays drawn by the renderer (preview and rendered video alike). */
+export interface RenderEffects {
+  /** Soft halo at the pointer position (needs tracked pointer movement). */
+  cursorHighlight: boolean;
+  /** Expanding ring at each tracked click. */
+  clickEmphasis: boolean;
 }
 
 /** How clicks were (or were not) tracked for a recording. */

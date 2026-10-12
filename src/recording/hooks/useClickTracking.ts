@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { TrackedClick } from '@/services/zoom/clicks';
+import type { TrackedClick, TrackedPointerBatch } from '@/services/zoom/clicks';
 import { clickTrackingSupport } from '@/services/zoom/support';
 import type { CaptureTarget, SelectedSurface } from '@/types';
 import { getErrorMessage } from '@/utils/errors';
@@ -18,6 +18,7 @@ export type TrackingStatus =
 type TrackerMessage =
   | { channel: 'tracker'; type: 'ready'; sessionId: string; origin: string }
   | { channel: 'tracker'; type: 'click'; sessionId: string; click: TrackedClick }
+  | { channel: 'tracker'; type: 'pointer'; sessionId: string; batch: TrackedPointerBatch }
   | { channel: 'tracker'; type: 'detached'; sessionId: string };
 
 function isTrackerMessage(message: unknown): message is TrackerMessage {
@@ -53,12 +54,16 @@ export function useClickTracking(input: {
   target: CaptureTarget | null;
   recording: boolean;
   onClick: (click: TrackedClick) => void;
+  /** Pointer movement while recording (follow-cursor zoom, cursor highlight). */
+  onPointer: (batch: TrackedPointerBatch) => void;
 }) {
   const { sessionId, enabled, surface, target, recording } = input;
   const support = clickTrackingSupport({ trackClicks: enabled, surface: surface?.surface ?? null, capturedTarget: target });
   const [status, setStatus] = useState<TrackingStatus>({ state: 'connecting' });
   const onClickRef = useRef(input.onClick);
   onClickRef.current = input.onClick;
+  const onPointerRef = useRef(input.onPointer);
+  onPointerRef.current = input.onPointer;
   const recordingRef = useRef(recording);
   recordingRef.current = recording;
   const tabId = support.supported ? target?.tabId : undefined;
@@ -110,6 +115,7 @@ export function useClickTracking(input: {
       if (!isTrackerMessage(message) || sender.tab?.id !== tabId || message.sessionId !== sessionId) return false;
       if (message.type === 'ready') setStatus({ state: 'active', origin: message.origin });
       else if (message.type === 'detached') setStatus({ state: 'connecting' });
+      else if (message.type === 'pointer') onPointerRef.current(message.batch);
       else onClickRef.current(message.click);
       return false;
     };

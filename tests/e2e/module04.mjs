@@ -151,7 +151,7 @@ export async function runModule04(test, getEnv, relaunch) {
     await editor.evaluate((ms) => {
       document.querySelector('video[aria-label$="recording"]').currentTime = ms / 1000;
     }, marker.timeMs + 200);
-    await editor.waitForFunction(() => Number(document.querySelector('[data-testid=zoom-layer]').dataset.scale) > 1.9);
+    await editor.waitForFunction(() => Number(document.querySelector('[data-testid=zoom-canvas]').dataset.scale) > 1.9);
 
     // Edit.
     await editor.click('ul[aria-label="Zoom effects"] li:first-child button[aria-label^="Edit"]');

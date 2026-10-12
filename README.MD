@@ -3,9 +3,8 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
-**Status: Module 04 (click tracking and automatic zoom) is complete.** When you record the browser tab you opened ZoomCapture on, your clicks there are tracked, with your knowledge, and turned into editable zoom effects. In the editor you can preview, add, edit, duplicate and delete those effects. Screen and window recordings don't get click tracking, and the app says so.
-Modules 01–03 (foundation, recording engine, recording library and storage) are still in place and tested.
-Module 01 (extension foundation) and Module 02 (recording engine) still work as before.
+**Status: Module 05 (rendering engine) is complete.** Zoom effects are drawn on a canvas by one rendering service that powers both the editor preview and **Render video**, which produces a new WebM file with the zoom applied. The rendered file shows the same zoom at the same timestamps as the preview (verified frame by frame in the end-to-end test), with the original audio in sync. The original recording is never changed.
+Modules 01–04 (foundation, recording engine, recording library and storage, click tracking and automatic zoom) are still in place and tested.
 
 ---
 
@@ -22,7 +21,7 @@ npm run build        # typecheck + production build → dist/
 npm run dev          # rebuild dist/ on every change (unminified, inline source maps)
 npm run typecheck    # TypeScript only
 npm run icons        # regenerate public/icons/*.png from scripts/generate-icons.mjs
-npm test             # unit tests (Vitest + fake-indexeddb): storage, saving, migrations, WebM header
+npm test             # unit tests (Vitest + fake-indexeddb): storage, saving, migrations, WebM header, zoom, rendering
 npm run test:e2e:install  # once: download Chrome for Testing into .cache/browsers
 npm run test:e2e     # build, then drive the real extension in Chrome for Testing
 ```
@@ -120,8 +119,8 @@ What Chrome lets an extension capture depends on the source. ZoomCapture tells y
 
 ### Output format and export
 
-Recordings are WebM (VP9 or VP8 video, Opus audio), which is what Chrome's MediaRecorder produces reliably on every platform. **Download** saves that file without re-encoding.
-MP4, GIF, and exports with zoom effects, camera overlay or backgrounds applied all need frames to be decoded and re-encoded (WebCodecs plus a muxer). That is the export module's job. The interface is ready in `services/export/types.ts`: implement `Exporter` and register it in `services/export/exporters.ts`. Asking for MP4 today raises `ExportUnavailableError` instead of producing a file that is wrongly labelled or empty.
+Recordings are WebM (VP9 or VP8 video, Opus audio), which is what Chrome's MediaRecorder produces reliably on every platform. **Download** (**Download original** in the editor) saves that file without re-encoding.
+**Render video** in the editor produces a new WebM with zoom effects, overlays and the camera bubble applied (see [Rendering engine](#rendering-engine-module-05)). MP4 and GIF are not produced yet: asking the `services/export` interface for them raises `ExportUnavailableError` instead of producing a file that is wrongly labelled or empty.
 
 ## Recording library and storage (Module 03)
 
@@ -185,10 +184,13 @@ Every write goes through `withTransaction()`, which aborts on any error, includi
 | `tests/unit/migrations.test.ts` | Fresh install schema; upgrading a real v2 database with projects, assets and blobs. |
 | `tests/unit/webmDuration.test.ts` | Inserting or updating Duration, TimecodeScale, sized segments, media data preserved byte for byte, unknown data left untouched. |
 | `tests/unit/storageErrors.test.ts` | Recognising quota errors however they surface; user-facing messages. |
-| `tests/unit/zoomCoordinates.test.ts` | **Coordinate mapping:** normalizing (edges, outside the content, pinch-zoom, different page sizes), mapping to outputs (`contain` letterbox, `cover` crop, `stretch`), keeping the view in frame, transform-origin math. |
+| `tests/unit/zoomCoordinates.test.ts` | **Coordinate mapping:** normalizing (edges, outside the content, pinch-zoom, different page sizes), mapping to outputs (`contain` letterbox, `cover` crop, `stretch`), keeping the view in frame. |
 | `tests/unit/clickTracking.test.ts` | Click filtering (synthetic, non-primary, outside, not recording). **Duplicate events** (double-click, re-delivered, quick clicks elsewhere kept). **Timestamp synchronization** across pauses, late arrival, epoch mapping. **Unsupported capture sources** (screen, window, picked tab, disabled, restricted pages). |
-| `tests/unit/zoomMarkers.test.ts` | Generation (one per click, merging held clicks, duplicates, timeline bounds). **Marker editing** (add, edit with clamping, duplicate, delete, regenerate keeps manual, annotations). Zoom state over time (easing, disabled, follow-cursor, highlight). Persistence (clicks on the recording and markers in the project, kept after reopening, failed edit leaves data unchanged). |
+| `tests/unit/zoomMarkers.test.ts` | Generation (one per click, merging held clicks, duplicates, timeline bounds). **Marker editing** (add, edit with clamping, duplicate, delete, regenerate keeps manual, annotations). Persistence (clicks and the sorted pointer path on the recording, markers in the project, kept after reopening, failed edit leaves data unchanged). |
+| `tests/unit/render.test.ts` | **Rendering calculations (Module 05):** camera transform and pixel crop at any resolution, edge clamping, the focus point always visible (2000 random cases), transitions never leaving the frame, inverse mapping; zoom timing (ease in, hold, ease out, intensity, transition length); **overlapping and nested effects without jumps**, independent of evaluation order; follow-cursor smoothing and the click fallback; pointer interpolation; letterboxed page → frame mapping; click emphasis, cursor highlight and annotation overlays; output size, encoder fallbacks and frame times; `drawFrame` crop and camera bubble against a mock canvas. |
+| `tests/unit/renderVideo.test.ts` | Rendering failures: unreadable file, **codec the browser can't decode** (named in the message); high-resolution fallback when the encoder rejects 4K; holding source frames for a constant frame rate with every decoded frame released, including on cancel. |
 | `tests/e2e/module04.mjs` | In real Chrome: no install-time host access; toolbar click on a demo page → *Record this tab* → on-page notice (hidden while recording) → real clicks normalized correctly, synthetic/right/duplicate clicks ignored, **timeline gap matches the real gap** → automatic markers saved → editor preview zooms at marker time; edit, duplicate, delete with undo, add, all kept after reload with the original clicks unchanged → same-site navigation re-attaches; another site pauses and a toolbar click resumes → screen recording shows the limitation and creates no automatic zoom. |
+| `tests/e2e/module05.mjs` | In real Chrome, recording a demo page (coloured grid; beeps on every click, flashes on the first): pointer path recorded at the right place → canvas preview while seeking (a corner zoom stays inside the frame), playing at 2× and **scrubbing** the timeline → switch an effect to follow-cursor, **drag an effect** to a new time, turn on the cursor highlight → **Render video** → the rendered file matches the preview at six moments (before, zooming in, following the cursor, zooming out, a moved effect, holding at a corner): mean difference ≤ 1 of 255, while a 250 ms offset differs by 25–60 → **audio in sync**: the beep starts at the same time in the original and the rendered file, and the flash appears on the same frame. |
 | `tests/e2e/run.mjs` | In real Chrome: record, then save with progress and a thumbnail → rename (including validation) → **close and reopen the browser** → library still shows everything → preview (object URL revoked) → download (`E2E demo.webm`) → delete (cancel, then confirm; every row removed) → disk full: error, nothing lost, Retry saving → disk full, quit, reopen, Recover from the library. |
 
 ## Click tracking and automatic zoom (Module 04)
@@ -212,7 +214,7 @@ Chrome extensions can't see clicks in other applications or on the desktop, so Z
 
 ### Transparency and privacy
 
-- The tracker records **only** the position (as a fraction of the visible page) and the time of primary-button presses: no page content, element names, text, keystrokes or URLs. (The site's origin is shown in the studio.)
+- The tracker records **only** the position (as a fraction of the visible page) and the time of primary-button presses and, while recording, where the pointer moves (sampled at most ~30 times a second, for follow-cursor zoom and the cursor highlight): no page content, element names, text, keystrokes or URLs. (The site's origin is shown in the studio.)
 - While a tracked tab isn't recording, it shows an on-page notice: *ZoomCapture is tracking clicks in this tab for automatic zoom*. The notice hides from the countdown on, so it never appears in the video. The studio shows whether tracking is on, for which site, and a live count of clicks captured.
 - When the session ends (saved, cancelled or tab closed), the tracker removes its listeners and the notice.
 - Settings → *Automatic zoom*: **Track clicks while recording a tab** (on/off) and **Create zoom effects automatically** (on/off; when off, clicks are still kept so effects can be generated later), plus defaults for **zoom level**, **duration** and **transition speed** (slow 900 ms / normal 600 ms / fast 350 ms).
@@ -222,6 +224,7 @@ Chrome extensions can't see clicks in other applications or on the desktop, so Z
 ```
 recorded tab (content/click-tracker.js, injected on demand)
    pointerdown → { epochMs = performance.timeOrigin + event.timeStamp, clientX/Y, viewport, button, isTrusted }
+   pointermove (while recording, ≤ 30/s, sent in 250 ms batches) → RecordingController.addPointerBatch() → Recording.cursor
         │ chrome.runtime.sendMessage (accepted only from the captured tab and this session)
         ▼
 Recording Studio → RecordingController.addTrackedClick()
@@ -235,8 +238,8 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 ```
 
 - **Timestamp synchronization:** each click carries the moment it happened in the page (`performance.timeOrigin + event.timeStamp`), not when the message arrived. `RecordingClock` keeps the history of recording segments, so a click is placed by when it happened, even if its message is processed later or during a pause. Clicks made while paused are ignored. In the end-to-end test, the gap between two clicks on the timeline matched the real gap within 150 ms.
-- **Coordinates:** clicks are normalized to the visible viewport (the area tab capture records), including pinch-zoom offsets, so a marker stays on the same spot at any output size. `mapToOutput()` converts to pixels for any output size (`contain`, `cover` or `stretch`). `clampFocus()` and `zoomTransformOrigin()` keep the zoomed view inside the frame.
-- **Generation:** one zoom effect per eligible click: fully zoomed at the click, held for *duration*, with *transition* easing in and out. A click that lands while the previous effect is still holding extends that effect and switches it to *follow clicks*, so the view pans instead of zooming out and in again. Effects never hold past the end of the recording.
+- **Coordinates:** clicks and pointer samples are normalized to the visible viewport (including pinch-zoom offsets), then mapped into the recorded video frame with `pageToFrame()`. That matters because tab capture letterboxes the page when its shape differs from the frame's. Tab capture is also asked for frames in the page's own aspect ratio, so normally there are no bars at all. A marker stays on the same spot at any output size. `mapToOutput()` converts to pixels for any output size (`contain`, `cover` or `stretch`), and `clampFocus()` keeps the zoomed view inside the frame.
+- **Generation:** one zoom effect per eligible click: fully zoomed at the click, held for *duration*, with *transition* easing in and out. A click that lands while the previous effect is still holding extends that effect and switches it to *follow cursor*, so the view pans instead of zooming out and in again. Effects never hold past the end of the recording.
 
 ### Zoom marker model (`types/zoom.ts`)
 
@@ -248,7 +251,7 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 | `scale` | Zoom level (1.1×–4×) |
 | `durationMs` | Hold after `timeMs` (0.3–20 s) |
 | `transitionMs` | Ease-in before and ease-out after the hold (0.1–2 s) |
-| `positionMode` | `fixed` or `follow-cursor` (pans to later clicks inside the effect) |
+| `positionMode` | `fixed` or `follow-cursor` (pans smoothly with the pointer during the hold; for recordings without pointer movement, to each later click) |
 | `annotation` | Optional caption, up to 200 characters |
 | `effect` | `zoom` (magnify) or `highlight` (spotlight ring, no magnification) |
 | `enabled` | Disabled effects are kept but not applied |
@@ -256,11 +259,40 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 
 ### Editing (editor workspace)
 
-- **Preview** plays the recording with the effects applied live (zoom transform, highlight ring, annotation). *Preview zoom effects* toggles them for comparison.
-- **Timeline** shows each effect's span, with its hold shaded, a tick for every tracked click, and the playhead. Click an effect to edit it, or click the bar to seek.
+- **Preview** is drawn by the rendering engine (Module 05), exactly as the rendered video will look. *Preview zoom effects* toggles zoom for comparison. With an effect selected, **Adjust framing** shows the whole frame with the zoomed area and lets you drag the focus point (or use the arrow keys).
+- **Timeline** shows each effect's span, with its hold shaded, a tick for every tracked click, and the playhead. Click an effect to edit it, **drag it to move it in time**, or press and drag on the tracks to **scrub**.
 - **Zoom effects** panel: an *enabled* checkbox, plus **Edit**, **Duplicate** and **Delete** (with **Undo**) for each effect, **Add at playhead**, and **Generate from clicks / Regenerate**. Regenerating replaces only unedited automatic effects, after confirmation.
 - **Edit dialog:** time, position (click on the thumbnail or type X/Y %), zoom level, hold, transition, effect, position mode, annotation and enabled. Values are validated and clamped.
 - Every change is saved in one read-modify-write transaction (`updateZoomMarkers`), so edits from two open pages can't overwrite each other.
+
+## Rendering engine (Module 05)
+
+One rendering service (`src/services/render`) turns a recording and its zoom markers into frames. The editor preview and **Render video** both call it, so the rendered file shows what the preview shows.
+
+```
+                       frameStateAt(scene, t)          (pure: camera + overlays at media time t)
+                                 │
+   preview: <video>.currentTime ─┤                     render: output frame k at t = k / fps
+   (rAF while playing; redraw    │                     (latest decoded source frame ≤ t)
+    on seek or edit when paused) ▼
+                        drawFrame(ctx, source, state)  (crop source → output, overlays, camera bubble)
+                                 │
+          editor <canvas> ◀──────┴──────▶ OffscreenCanvas → VP9 encoder → WebM (+ original Opus audio packets)
+```
+
+- **Camera model** (`camera.ts`): `u = p · scale − offset`. The camera for a focus point is clamped so the view never leaves the frame, and the point is always visible. Because this form is linear, blending two cameras moves every point along a straight line: a point visible in both stays visible throughout, and the view never shows anything beyond the edges. `sourceCrop()` gives the crop rectangle in source pixels, for any resolution.
+- **Timing** (`frameState.ts`): each effect eases in over *transition* before its time, holds for *duration*, then eases out (ease-in-out cubic). Overlapping effects are applied oldest first, each blending from the camera so far towards its own framing by its strength. A new effect pans from the current framing, and when a nested effect ends the outer one's framing returns, with no jumps. Disabled effects are skipped; *highlight* effects dim the frame around the point without magnifying.
+- **Follow-cursor:** during the hold, the focus follows the recorded pointer, smoothed with a 300 ms exponential filter computed only from the path and the time (stateless). So seeking, pausing and rendering give the same position as playing. For recordings without pointer movement it pans to each later click instead.
+- **Overlays** (*Cursor & clicks* panel, saved per project): *Click emphasis* draws an expanding ring at each tracked click (on by default). *Cursor highlight* draws a halo at the pointer; it needs pointer movement, so only tab recordings from this version on have it. Annotations fade with their effect. All positions go through the camera, so they stay on the zoomed content.
+- **Synchronization:** effects are evaluated at the **media time** of the frame being drawn (`video.currentTime` in the preview, the output frame timestamp in the render), never at wall-clock time. That covers seeking, pausing, scrubbing and the 0.5×–2× speed control. While playing, the preview redraws every animation frame, so zoom animates even when the recording holds a still frame. While paused nothing runs; it redraws only when the time, the scene or the canvas size changes.
+- **Render video** (`renderVideo.ts`, loaded only when used):
+  - **Pipeline:** WebCodecs through [Mediabunny](https://github.com/Vanilagy/mediabunny) (MPL-2.0). It decodes the screen video in order, draws each output frame at a constant 30 or 60 fps from the latest source frame, encodes VP9 (VP8 or AV1 as fallbacks) and writes WebM.
+  - **Audio:** packets are copied unchanged with their original timestamps, so audio stays exactly as in the original. If the codec can't go into WebM it is re-encoded to Opus. Without a usable audio track, the result says it has no sound.
+  - **Choices:** resolution (never above the recording's), frame rate, quality, and whether to include the camera bubble. They're saved in the project's export settings.
+  - **Result:** shown with a player, size and details before you download it. You can cancel at any time; leaving the page while rendering asks first.
+  - **Memory:** each decoded frame is released right after it is drawn.
+- **Graceful failures:** a file that can't be read, or a video codec this browser can't decode, stops with a message naming the problem. If the encoder rejects the requested size (e.g. 4K on some GPUs), rendering steps down to 1440p, 1080p or 720p and says so in the result. A camera track that can't be decoded is left out, with a note.
+- **Why sequential decoding:** a still screen gives the recorder few reasons for keyframes, so a MediaRecorder file can hold a single keyframe for minutes, and it has no cue index. Seeking into such files for every output frame proved unreliable (frames came back empty after the first second), so the render decodes the file once, in order, and holds frames (`heldFrames`).
 
 ## Folder structure
 
@@ -269,8 +301,8 @@ ZoomCapture/
 ├── package.json, tsconfig.json, vite.config.ts, vite.content.config.ts, vitest.config.ts, .gitignore
 ├── tests/
 │   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors,
-│   │                           # zoomCoordinates, clickTracking, zoomMarkers
-│   └── e2e/{run,lib,module04}.mjs   # Puppeteer + Chrome for Testing against dist/
+│   │                           # zoomCoordinates, clickTracking, zoomMarkers, render, renderVideo
+│   └── e2e/{run,lib,module04,module05}.mjs   # Puppeteer + Chrome for Testing against dist/
 ├── public/                     # copied verbatim into dist/
 │   ├── manifest.json           # Manifest V3
 │   └── icons/icon-{16,32,48,128}.png
@@ -295,7 +327,7 @@ ZoomCapture/
     ├── editor/                 # recording library + recording workspace
     │   ├── EditorPage.tsx      # ?recording=<id> (older ?project=<id> links still work)
     │   └── components/{RecordingLibrary,RecordingWorkspace,TimelineView,ZoomPreview,ZoomEffectsPanel,
-    │                       ZoomMarkerDialog,RecoverableRecordings,EditorHeader}.tsx
+    │                       ZoomMarkerDialog,RenderEffectsPanel,RenderVideoDialog,RecoverableRecordings,EditorHeader}.tsx
     ├── settings/{SettingsPage,AutoZoomSettingsPanel}.tsx   # options page
     ├── shared/
     │   ├── components/         # Button, IconButton, Toggle, Tooltip, Dialog/ConfirmDialog,
@@ -309,7 +341,9 @@ ZoomCapture/
     ├── services/
     │   ├── messaging.ts, settings.ts, sessionState.ts, navigation.ts
     │   ├── media/{displayCapture,tabCapture,userMedia,audioLevel,thumbnail}.ts
-    │   ├── zoom/               # coordinates, clicks (filter + dedupe), support (per source), markers
+    │   ├── zoom/               # coordinates, clicks (filter + dedupe, pointer batches), support (per source), markers
+    │   ├── render/             # camera, paths (pointer, smoothing), frameState, draw, output,
+    │   │                       # PreviewRenderer (editor canvas), renderVideo (WebCodecs export)
     │   ├── recording/          # RecordingController, TrackRecorder, RecordingClock, audioMixer,
     │   │                       # mimeTypes, webmDuration, finalizeRecording
     │   ├── export/             # Exporter interface, original-file exporter, download helper
@@ -321,7 +355,7 @@ ZoomCapture/
     └── styles/globals.css      # Tailwind v4 + design tokens
 ```
 
-Build output: `dist/manifest.json`, `dist/background.js`, `dist/content/click-tracker.js`, `dist/{popup,recording,editor,settings}/index.html`, `dist/assets/*`, `dist/icons/*`.
+Build output: `dist/manifest.json`, `dist/background.js`, `dist/content/click-tracker.js`, `dist/{popup,recording,editor,settings}/index.html`, `dist/assets/*` (the video encoder is in its own `renderVideo-*.js` chunk, loaded only when rendering), `dist/icons/*`.
 
 ---
 
@@ -469,6 +503,35 @@ Automated: `npm test` (79 unit tests) and `npm run test:e2e` (14 end-to-end test
 - [ ] Change the default zoom level, duration and transition speed. New recordings use them, and **Regenerate** uses the recording's own settings.
 
 **Editing**
-- [ ] Edit an effect: time, position (click on the picture), zoom level, hold, transition, Zoom/Highlight, Fixed/Follow clicks, annotation, enabled. The preview reflects each change after saving.
+- [ ] Edit an effect: time, position (click on the picture), zoom level, hold, transition, Zoom/Highlight, Fixed/Follow cursor, annotation, enabled. The preview reflects each change after saving.
 - [ ] **Duplicate**, **Delete** (then **Undo**), **Add at playhead**, and toggle **enabled**. Reload: everything is kept.
 - [ ] **Regenerate** after editing one effect: the edited and manual effects are kept, only untouched automatic ones are recreated.
+
+---
+
+## Module 05 test checklist
+
+Automated: `npm test` (113 unit tests) and `npm run test:e2e` (17 end-to-end tests). Manual checks on a real device:
+
+**Preview**
+- [ ] Open a tab recording with clicks in the editor and play it. The view zooms smoothly into each click, holds, and zooms out, and a ring marks each click.
+- [ ] Pause, seek by clicking the timeline, and drag along the timeline (scrub). The preview shows the zoom for each position immediately.
+- [ ] Change **Speed** to 0.5× and 2×. Zoom timing follows the video, not the clock.
+- [ ] A click near a corner zooms towards the corner without showing anything beyond the frame, and the clicked spot stays visible.
+- [ ] Untick **Preview zoom effects**: the full frame is shown. Tick it again.
+
+**Effects and editing**
+- [ ] Select an effect, click **Adjust framing**, and drag the focus point. The rectangle shows the zoomed area and stays inside the frame at the edges, and the effect moves there. Arrow keys work too.
+- [ ] Drag an effect along the timeline. It moves to the new time and is saved; a plain click still opens the edit dialog.
+- [ ] Change the zoom level and transition length in the edit dialog. The preview zooms deeper, and faster or slower, accordingly.
+- [ ] Set an effect to **Follow cursor** in a recording where you moved the mouse while it held. The view pans smoothly with the pointer.
+- [ ] Make two effects overlap. The view pans from one to the other, and back, without a jump.
+- [ ] Turn **Cursor highlight** on and **Click emphasis** off. The preview updates, and after a reload the choice is kept.
+
+**Rendering**
+- [ ] **Render video** → **Render**. Progress shows the frames rendered; the result plays in the dialog with the same zoom, overlays and timing as the preview. **Download** saves `<name> (zoom).webm`, which plays in Chrome and VLC.
+- [ ] The rendered video's audio is in sync with the picture (record a tab playing a video with sound, or talk with the microphone on).
+- [ ] With a camera bubble, it appears in the same place, round, mirrored and in sync. Unticking **Include camera bubble** leaves it out.
+- [ ] Render a high-resolution recording (e.g. a 4K screen). Either it renders at full size, or the result says which smaller size was used.
+- [ ] **Cancel rendering** stops it. Closing the tab while rendering asks for confirmation first.
+- [ ] **Download original** still saves the untouched recording, and the library preview still plays it.

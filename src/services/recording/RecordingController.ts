@@ -1,5 +1,5 @@
 import { saveDraft } from '@/services/storage/recordingDraftRepository';
-import { isDuplicateClick, toInteraction, type IgnoredReason, type TrackedClick } from '@/services/zoom/clicks';
+import { isDuplicateClick, toCursorSamples, toInteraction, type IgnoredReason, type TrackedClick, type TrackedPointerBatch } from '@/services/zoom/clicks';
 import type {
   AutoZoomSettings,
   CameraLayout,
@@ -67,6 +67,7 @@ export class RecordingController {
   private readonly tracks: ActiveTrack[] = [];
   private readonly mixer: MixedAudio | null;
   private readonly cleanups: Array<() => void> = [];
+  private readonly screenVideo: MediaStreamTrack;
   private draftWrites: Promise<void> = Promise.resolve();
   private failed = false;
 
@@ -74,6 +75,7 @@ export class RecordingController {
     const { display, camera, microphone } = options.inputs;
     const screenVideo = display.getVideoTracks()[0];
     if (!screenVideo || screenVideo.readyState !== 'live') throw new Error('The shared screen is no longer available.');
+    this.screenVideo = screenVideo;
 
     const micTrack = microphone?.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
     const systemTrack = display.getAudioTracks().find((t) => t.readyState === 'live') ?? null;
@@ -87,6 +89,7 @@ export class RecordingController {
       tracks: [],
       cameraLayout: cameraTrack ? options.cameraLayout : undefined,
       interactions: [],
+      cursor: [],
       clickTracking: options.clickTracking,
       autoZoom: options.autoZoom,
       source: options.source,
@@ -94,7 +97,7 @@ export class RecordingController {
       updatedAt: now,
     };
 
-    this.mixer = mixAudioTracks([micTrack, systemTrack].filter((t): t is MediaStreamTrack => t !== null));
+    this.mixer = mixAudioTracks([micTrack, systemTrack].filter((t) => t !== null));
     const screenSettings = screenVideo.getSettings();
     const screenStream = new MediaStream(this.mixer ? [screenVideo, this.mixer.track] : [screenVideo]);
     this.addTrack('screen', screenStream, [screenVideo], {
@@ -236,12 +239,27 @@ export class RecordingController {
    */
   addTrackedClick(click: TrackedClick): { event: InteractionEvent } | { ignored: IgnoredReason | 'duplicate' } {
     if (this.state !== 'recording' && this.state !== 'paused') return { ignored: 'not-recording' };
-    const result = toInteraction(click, this.clock.recordedTimeAtEpoch(click.epochMs), createId('ev'));
+    const result = toInteraction(click, this.clock.recordedTimeAtEpoch(click.epochMs), createId('ev'), this.frameSize());
     if (!('event' in result)) return result;
     const interactions = this.draft.interactions ?? [];
     if (isDuplicateClick(interactions.at(-1), result.event)) return { ignored: 'duplicate' };
     this.draft.interactions = [...interactions, result.event];
     return result;
+  }
+
+  /** Pointer movement from the recorded tab, placed on the timeline like clicks. */
+  addPointerBatch(batch: TrackedPointerBatch): number {
+    if (this.state !== 'recording' && this.state !== 'paused') return 0;
+    const samples = toCursorSamples(batch, (epochMs) => this.clock.recordedTimeAtEpoch(epochMs), this.frameSize());
+    // Snapshots are cloned before saving, so appending in place is safe.
+    (this.draft.cursor ??= []).push(...samples);
+    return samples.length;
+  }
+
+  /** Current size of the recorded screen frames (positions are stored relative to them). */
+  private frameSize(): { width: number; height: number } | null {
+    const { width, height } = this.screenVideo.getSettings();
+    return width && height ? { width, height } : null;
   }
 
   get clickCount(): number {

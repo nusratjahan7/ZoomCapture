@@ -11,7 +11,7 @@
  * All times are in milliseconds relative to the start of the timeline.
  */
 import type { SelectedSurface } from './session';
-import type { ZoomMarker, ZoomSettings } from './zoom';
+import type { RenderEffects, ZoomMarker, ZoomSettings } from './zoom';
 
 export type MediaAssetKind =
   | 'screen'
@@ -132,6 +132,8 @@ export interface Project {
   timeline: Timeline;
   zoom: ZoomSettings;
   cameraLayout?: CameraLayout;
+  /** Cursor and click overlays; absent in older projects (see `renderEffectsOf`). */
+  renderEffects?: RenderEffects;
   subtitles: SubtitleTrack[];
   /** Assets the user imported into this project (images, music, video); `MediaAsset.projectId` = this id. */
   importedAssetIds: string[];

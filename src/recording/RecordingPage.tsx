@@ -23,7 +23,7 @@ import {
 import { useActiveSession } from '@/shared/hooks/useActiveSession';
 import { useMediaDevices } from '@/shared/hooks/useMediaDevices';
 import { useSettings } from '@/shared/hooks/useSettings';
-import type { TrackedClick } from '@/services/zoom/clicks';
+import type { TrackedClick, TrackedPointerBatch } from '@/services/zoom/clicks';
 import type { CameraLayout, CaptureOptions, ClickTrackingInfo, RecordingTrackKind, SelectedSurface } from '@/types';
 import { getErrorMessage, isPickerDismissed } from '@/utils/errors';
 import { CameraBubble } from './components/CameraBubble';
@@ -109,6 +109,7 @@ export function RecordingPage() {
   // Click tracking and the recording flow feed each other: the tracker needs to know when
   // recording is active, the flow receives clicks. A ref and a state value break the cycle.
   const addTrackedClickRef = useRef<(click: TrackedClick) => void>(() => undefined);
+  const addPointerBatchRef = useRef<(batch: TrackedPointerBatch) => void>(() => undefined);
   const [trackerRecording, setTrackerRecording] = useState(false);
   const tracking = useClickTracking({
     sessionId,
@@ -117,6 +118,7 @@ export function RecordingPage() {
     target: display.target,
     recording: trackerRecording,
     onClick: (click) => addTrackedClickRef.current(click),
+    onPointer: (batch) => addPointerBatchRef.current(batch),
   });
   const trackingStatus = tracking.status;
   const clickTracking = useMemo<ClickTrackingInfo>(() => {
@@ -152,6 +154,7 @@ export function RecordingPage() {
   );
   phaseRef.current = flow.phase;
   addTrackedClickRef.current = flow.addTrackedClick;
+  addPointerBatchRef.current = flow.addPointerBatch;
   const active = ACTIVE_PHASES.includes(flow.phase);
   const recording = flow.phase === 'recording' || flow.phase === 'paused';
   // The tracker's on-page notice hides from the countdown on, so it never appears in the video.
