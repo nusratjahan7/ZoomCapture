@@ -23,12 +23,14 @@ export async function findChrome() {
  * A copy of the built extension with access to websites already granted: stands in for the user
  * accepting Chrome's permission prompt (browser UI that automation can't click).
  */
-export function extensionWithSiteAccess() {
+export function extensionWithSiteAccess({ optionalPermissions = false } = {}) {
   const copy = mkdtempSync(join(tmpdir(), 'zc-ext-'));
   cpSync(DIST, copy, { recursive: true });
   const manifestPath = join(copy, 'manifest.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   manifest.host_permissions = [...(manifest.host_permissions ?? []), ...manifest.optional_host_permissions];
+  // Also the optional API permissions (e.g. nativeMessaging), as if the user had allowed them.
+  if (optionalPermissions) manifest.permissions = [...manifest.permissions, ...(manifest.optional_permissions ?? [])];
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
   return copy;
 }

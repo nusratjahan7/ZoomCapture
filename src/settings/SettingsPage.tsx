@@ -14,6 +14,7 @@ import { describeMediaError, getErrorMessage } from '@/utils/errors';
 import { formatBytes } from '@/utils/format';
 import { useMediaDevices } from '@/shared/hooks/useMediaDevices';
 import { AutoZoomSettingsPanel } from './AutoZoomSettingsPanel';
+import { NativeControlsSetting } from './NativeControlsSetting';
 
 const RESOLUTION_OPTIONS: Array<{ value: CaptureResolution; label: string }> = [
   { value: '1080p', label: 'Up to 1080p (1920×1080)' },
@@ -181,6 +182,7 @@ export function SettingsPage() {
                   disabled={!settings.floatingControls}
                   onCheckedChange={(hideFloatingWhileRecording) => save({ hideFloatingWhileRecording })}
                 />
+                <NativeControlsSetting enabled={settings.nativeControls} onChange={(nativeControls) => void save({ nativeControls })} />
               </div>
             </Panel>
 

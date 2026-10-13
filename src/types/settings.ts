@@ -26,6 +26,11 @@ export interface UserSettings {
    * include it, so it stays open for them.
    */
   hideFloatingWhileRecording: boolean;
+  /**
+   * Windows: during entire-screen recordings, show the controls in the native helper's window,
+   * which Windows leaves out of screen captures (needs the helper and `nativeMessaging`).
+   */
+  nativeControls: boolean;
   /** Last camera bubble placement; copied into each new project. */
   cameraBubble: CameraLayout;
   autoZoom: AutoZoomSettings;
@@ -43,6 +48,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   countdownSeconds: 3,
   floatingControls: true,
   hideFloatingWhileRecording: true,
+  nativeControls: false,
   cameraBubble: { x: 0.86, y: 0.78, size: 'medium' },
   autoZoom: { enabled: true, trackClicks: true, scale: 2, durationMs: 2500, transitionSpeed: 'normal' },
 };

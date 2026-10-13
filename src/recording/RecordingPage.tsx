@@ -36,6 +36,7 @@ import { SavingProgress } from './components/SavingProgress';
 import { SourcePreview } from './components/SourcePreview';
 import { useDisplayCapture } from './hooks/useDisplayCapture';
 import { useDocumentPip } from './hooks/useDocumentPip';
+import { useNativeControls } from './hooks/useNativeControls';
 import { ACTIVE_PHASES, useRecordingFlow, type FlowPhase } from './hooks/useRecordingFlow';
 import { useClickTracking } from './hooks/useClickTracking';
 import { useStudioCommands } from './hooks/useStudioCommands';
@@ -242,21 +243,57 @@ export function RecordingPage() {
     });
   };
 
+  // Windows helper (Settings → On screen, but not in the video): during entire-screen recordings
+  // the controls move to its window, which Windows leaves out of screen captures.
+  const native = useNativeControls({
+    active: Boolean(settings?.nativeControls) && capturesWholeScreen && recording,
+    state: {
+      phase: flow.phase === 'paused' ? 'paused' : 'recording',
+      elapsedMs: flow.elapsedMs,
+      micAvailable: recording && flow.recordedKinds.includes('microphone'),
+      micMuted: flow.micMuted,
+    },
+    onCommand: (command) => {
+      if (command === 'pause') flow.pause();
+      else if (command === 'resume') flow.resume();
+      else if (command === 'stop') void flow.stop();
+      else flow.toggleMicMuted();
+    },
+  });
+  const nativeState = native.state;
+  useEffect(() => {
+    if (native.state === 'shown') {
+      toast.show(
+        native.excluded
+          ? { variant: 'success', title: 'Controls are on screen, not in the video', description: 'Drag the small controls window anywhere. Windows leaves it out of the recording.' }
+          : { variant: 'error', title: 'The controls will appear in the video', description: 'This version of Windows can’t leave windows out of screen captures.' },
+      );
+    } else if (native.state === 'failed') {
+      toast.show({ variant: 'error', title: 'On-screen controls unavailable', description: `${native.reason} Pause or stop from the ZoomCapture toolbar icon or this tab.` });
+    }
+    // Once per change of state.
+  }, [nativeState]);
+
   // Tab and window captures never include the floating window, so it stays open for them. An
   // entire-screen capture records everything on screen, and no browser API can leave one window
   // out: there it shows the countdown, then closes as recording starts (Settings → Hide it while
-  // recording your entire screen). Once per session.
+  // recording your entire screen), or once the Windows helper's controls are on screen. Once per
+  // session.
   const hidFloating = useRef(false);
   const { pipWindow, close: closePip } = pip;
   useEffect(() => {
-    if (flow.phase !== 'recording' || !pipWindow || !capturesWholeScreen || !settings?.hideFloatingWhileRecording || hidFloating.current) return;
+    if (flow.phase !== 'recording' || !pipWindow || !capturesWholeScreen || hidFloating.current) return;
+    const nativeShown = nativeState === 'shown';
+    if (!nativeShown && !settings?.hideFloatingWhileRecording) return;
     hidFloating.current = true;
     closePip();
+    // The helper's own message says where the controls went.
+    if (nativeShown || settings?.nativeControls) return;
     toast.show({
       title: 'Floating controls hidden',
       description: 'A recording of the entire screen would capture them. Pause or stop from the ZoomCapture toolbar icon or this tab.',
     });
-  }, [flow.phase, pipWindow, closePip, capturesWholeScreen, settings?.hideFloatingWhileRecording, toast]);
+  }, [flow.phase, pipWindow, closePip, capturesWholeScreen, nativeState, settings?.hideFloatingWhileRecording, settings?.nativeControls, toast]);
 
   // Ask the browser to keep recordings even under storage pressure (granted silently for extensions).
   useEffect(() => {
