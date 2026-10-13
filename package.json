@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e:install": "npx @puppeteer/browsers install chrome@stable --path .cache/browsers",
-    "test:e2e": "npm run build && node tests/e2e/run.mjs"
+    "test:e2e": "npm run build && node tests/e2e/run.mjs",
+    "test:native": "npm run build && node tests/native/run.mjs"
   },
   "dependencies": {
     "idb": "^8.0.4",
