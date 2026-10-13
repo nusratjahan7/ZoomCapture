@@ -123,13 +123,19 @@ export function RecordingPage() {
   const trackingStatus = tracking.status;
   const clickTracking = useMemo<ClickTrackingInfo>(() => {
     if (trackingStatus.state === 'unsupported') return { mode: 'unsupported', reason: trackingStatus.reason };
+    if (tracking.scope === 'screen') {
+      if (trackingStatus.state === 'needs-permission') {
+        return { mode: 'unsupported', reason: 'Click tracking in Chrome tabs was not allowed for this screen recording.' };
+      }
+      return { mode: 'screen', reason: 'reason' in trackingStatus ? trackingStatus.reason : undefined };
+    }
     return {
       mode: 'tab',
       tabTitle: display.target?.title,
       origin: display.target?.origin,
       reason: 'reason' in trackingStatus ? trackingStatus.reason : undefined,
     };
-  }, [trackingStatus, display.target]);
+  }, [trackingStatus, tracking.scope, display.target]);
 
   const flow = useRecordingFlow(
     {
@@ -219,7 +225,9 @@ export function RecordingPage() {
 
   const startRecording = () => {
     // Picture-in-Picture needs the click's user activation, so it opens here, before the countdown.
-    if (settings?.floatingControls && pip.supported) openFloatingControls();
+    // Without a countdown it would close again at once when hidden while recording: not opened then.
+    const hiddenAtOnce = settings?.hideFloatingWhileRecording && settings.countdownSeconds === 0;
+    if (settings?.floatingControls && pip.supported && !hiddenAtOnce) openFloatingControls();
     flow.start();
     void availableSpace().then((free) => {
       if (free !== undefined && free < LOW_SPACE_BYTES) {
@@ -231,6 +239,20 @@ export function RecordingPage() {
       }
     });
   };
+
+  // The floating window shows the countdown, then closes as recording starts so it isn't captured
+  // in a screen recording (Settings → Hide it while recording). Once per session.
+  const hidFloating = useRef(false);
+  const { pipWindow, close: closePip } = pip;
+  useEffect(() => {
+    if (flow.phase !== 'recording' || !pipWindow || !settings?.hideFloatingWhileRecording || hidFloating.current) return;
+    hidFloating.current = true;
+    closePip();
+    toast.show({
+      title: 'Floating controls hidden',
+      description: 'So they stay out of the video. Pause or stop from the ZoomCapture toolbar icon or this tab.',
+    });
+  }, [flow.phase, pipWindow, closePip, settings?.hideFloatingWhileRecording, toast]);
 
   // Ask the browser to keep recordings even under storage pressure (granted silently for extensions).
   useEffect(() => {
@@ -433,6 +455,7 @@ export function RecordingPage() {
             recording={recording}
             autoZoomEnabled={settings?.autoZoom.enabled ?? false}
             onAllowOnSite={tracking.allowOnSite}
+            onAllowScreen={tracking.allowScreen}
           />
           <DevicePanel
             kind="camera"

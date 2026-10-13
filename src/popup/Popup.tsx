@@ -112,7 +112,7 @@ export function Popup() {
                 ? `Records this tab${trackClicks ? ' and tracks your clicks in it for automatic zoom' : ''}.`
                 : source === 'tab'
                   ? 'Chrome will ask which tab to share. Clicks can’t be tracked on this page.'
-                  : 'Opens the Recording Studio, where Chrome asks what to share. Clicks are tracked only when recording a browser tab.'}
+                  : 'Opens the Recording Studio, where Chrome asks what to share. Clicks are tracked in this tab, or in Chrome tabs when you record your entire screen.'}
             </p>
           </section>
         )}

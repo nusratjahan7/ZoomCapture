@@ -148,7 +148,7 @@ async function commitRecording(draft: RecordingDraft): Promise<FinalizeResult> {
       updatedAt: now,
     };
     const project = newProject(draft.projectId!, recording.id, now);
-    if (draft.autoZoom) project.zoom = zoomSettingsFrom(draft.autoZoom, recording.clickTracking.mode === 'tab');
+    if (draft.autoZoom) project.zoom = zoomSettingsFrom(draft.autoZoom, recording.clickTracking.mode !== 'unsupported');
     // Zoom markers live in the editable project, generated from (but independent of) the clicks.
     const zoomMarkers =
       project.zoom.mode === 'auto' ? generateZoomMarkers(recording.interactions, project.zoom, recording.durationMs, now) : [];

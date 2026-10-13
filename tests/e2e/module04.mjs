@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { button, dbCounts, dialogButton, DIST, readRecordings, sleep, waitForText } from './lib.mjs';
+import { button, dbCounts, DIST, extensionWithSiteAccess, openEffectsTab, readRecordings, seekEditor, setRange, sleep, waitForText, waitSaved } from './lib.mjs';
 
 /** A local page with nothing but a known layout to click on. */
 export function startDemoServer() {
@@ -142,49 +142,44 @@ export async function runModule04(test, getEnv, relaunch) {
   await test('editing: zoom effects can be previewed, edited, duplicated, deleted (with undo) and added', async () => {
     const env = getEnv();
     const editor = await env.open(`editor/index.html?recording=${state.recording.id}`);
-    await waitForText(editor, 'Zoom effects');
+    await editor.setViewport({ width: 1440, height: 900 });
+    await editor.bringToFront();
+    await editor.waitForSelector('[data-testid=zoom-canvas]');
+    await openEffectsTab(editor);
     const effectCount = () => editor.$$eval('ul[aria-label="Zoom effects"] li', (items) => items.length);
     assert.equal(await effectCount(), 2);
 
     // Preview: at a marker's time the view is zoomed in.
     const marker = state.project.timeline.zoomMarkers[0];
-    await editor.evaluate((ms) => {
-      document.querySelector('video[aria-label$="recording"]').currentTime = ms / 1000;
-    }, marker.timeMs + 200);
+    await seekEditor(editor, marker.timeMs + 200);
     await editor.waitForFunction(() => Number(document.querySelector('[data-testid=zoom-canvas]').dataset.scale) > 1.9);
 
-    // Edit.
+    // Edit in the properties panel: selecting an effect shows its properties.
     await editor.click('ul[aria-label="Zoom effects"] li:first-child button[aria-label^="Edit"]');
-    await editor.waitForSelector('dialog[open] form');
-    await editor.$eval('dialog[open] input[type=range]', (input) => {
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      setter.call(input, '3');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    const annotation = await editor.$('xpath/.//dialog[@open]//label[contains(., "Annotation")]/following-sibling::input');
-    await annotation.type('Open the menu');
-    await (await dialogButton(editor, 'Save effect')).click();
-    await waitForText(editor, 'Zoom effect saved');
+    await waitForText(editor, 'Zoom level');
+    await setRange(await editor.$('xpath/.//aside[@aria-label="Properties"]//label[contains(., "Zoom level")]/following-sibling::div/input[@type="range"]'), 3);
+    const caption = await editor.$('xpath/.//aside[@aria-label="Properties"]//label[contains(., "Caption")]/following-sibling::input');
+    await caption.type('Open the menu');
 
-    // Duplicate, then delete with undo.
+    // Duplicate, then delete with undo (toolbar), from the list (selecting showed the properties).
+    await openEffectsTab(editor);
     await editor.click('ul[aria-label="Zoom effects"] li:first-child button[aria-label^="Duplicate"]');
-    await waitForText(editor, 'Zoom effect duplicated');
-    assert.equal(await effectCount(), 3);
+    await editor.waitForFunction(() => document.querySelectorAll('ul[aria-label="Zoom effects"] li').length === 3);
     await editor.click('ul[aria-label="Zoom effects"] li:last-child button[aria-label^="Delete"]');
-    await waitForText(editor, 'Zoom effect deleted');
-    assert.equal(await effectCount(), 2);
-    await (await button(editor, 'Undo')).click();
+    await editor.waitForFunction(() => document.querySelectorAll('ul[aria-label="Zoom effects"] li').length === 2);
+    await editor.click('button[aria-label^="Undo"]');
+    await openEffectsTab(editor);
     await editor.waitForFunction(() => document.querySelectorAll('ul[aria-label="Zoom effects"] li').length === 3);
 
     // Add at the playhead.
     await (await button(editor, 'Add at playhead')).click();
-    await editor.waitForSelector('dialog[open] form');
-    await (await dialogButton(editor, 'Cancel')).click();
-    assert.equal(await effectCount(), 4);
+    await editor.waitForFunction(() => document.querySelectorAll('ul[aria-label="Zoom effects"] li').length === 4);
 
-    // Everything persisted, independently of the original recording.
+    // Everything is saved automatically, independently of the original recording.
+    await waitSaved(editor);
     await editor.reload();
-    await waitForText(editor, 'Zoom effects');
+    await editor.waitForSelector('[data-testid=zoom-canvas]');
+    await openEffectsTab(editor);
     assert.equal(await effectCount(), 4);
     const saved = await readProject(editor, state.project.id);
     const edited = saved.timeline.zoomMarkers.find((m) => m.id === marker.id);
@@ -236,13 +231,11 @@ export async function runModule04(test, getEnv, relaunch) {
     await demo.close();
   });
 
-  await test('unsupported source: screen recordings explain the limitation and create no automatic zoom', async () => {
-    await relaunch(); // the fake screen picker stands in for choosing the entire screen
-    const env = getEnv();
-    await setSettings(env, { defaultSource: 'screen' });
-    const before = (await dbCounts(await env.open('settings/index.html'))).recordings;
+  /** Starts a studio session for the entire screen (the fake picker stands in for choosing it). */
+  async function openScreenStudio(env) {
+    await setSettings(env, { defaultSource: 'screen', cameraEnabled: false, microphoneEnabled: false, countdownSeconds: 0, floatingControls: false });
     const popup = await env.open('popup/index.html');
-    await waitForText(popup, 'Clicks are tracked only when recording a browser tab.');
+    await waitForText(popup, 'Chrome tabs when you record your entire screen');
     const beforeStudio = new Set(env.browser.targets());
     const studioTarget = env.browser.waitForTarget((t) => t.url().includes('/recording/index.html') && !beforeStudio.has(t));
     await (await button(popup, 'Start Recording')).click();
@@ -250,26 +243,87 @@ export async function runModule04(test, getEnv, relaunch) {
     await studio.bringToFront();
     await (await button(studio, 'Choose screen')).click();
     await studio.waitForSelector('video[aria-label="Live preview of the shared surface"]');
-    await waitForText(studio, 'Clicks are not tracked');
-    await waitForText(studio, 'Chrome extensions can only observe clicks inside a browser tab');
+    return studio;
+  }
+
+  await test('screen recording: without access to websites, clicks are not tracked and no automatic zoom is made', async () => {
+    await relaunch();
+    const env = getEnv();
+    const studio = await openScreenStudio(env);
+    // Tracking in Chrome tabs needs the user's permission first: the studio asks, nothing runs yet.
+    await waitForText(studio, 'Allow click tracking in Chrome');
+    await button(studio, 'Allow click tracking');
     await (await button(studio, 'Start recording')).click();
     await studio.waitForSelector('[role=timer]');
-    await sleep(3000);
+    await sleep(2000);
     await (await button(studio, 'Stop')).click();
     await studio.waitForSelector('xpath/.//h1[contains(., "Recording saved")]', { timeout: 30_000 });
 
-    const recordings = await readRecordings(studio);
-    assert.equal(recordings.length, before + 1);
-    const recording = recordings.sort((a, b) => b.createdAt - a.createdAt)[0];
+    const recording = (await readRecordings(studio)).sort((a, b) => b.createdAt - a.createdAt)[0];
     assert.equal(recording.clickTracking.mode, 'unsupported');
+    assert.match(recording.clickTracking.reason, /not allowed/);
     assert.equal(recording.interactions.length, 0);
     const project = await readProject(studio, recording.projectId);
     assert.deepEqual(project.timeline.zoomMarkers, []);
     assert.equal(project.zoom.mode, 'manual');
 
     const editor = await env.open(`editor/index.html?recording=${recording.id}`);
+    await openEffectsTab(editor);
     await waitForText(editor, 'Clicks were not tracked for this recording.');
     await waitForText(editor, 'Use “Add at playhead” to place zoom effects.');
+  });
+
+  await test('screen recording: clicks in Chrome tabs are tracked and become automatic zoom effects', async () => {
+    // Access to websites already granted: stands in for accepting Chrome's permission prompt.
+    await relaunch({ extensionPath: extensionWithSiteAccess() });
+    const env = getEnv();
+    const demo = await env.browser.newPage();
+    await demo.goto(demoUrl);
+    const studio = await openScreenStudio(env);
+    await waitForText(studio, 'Chrome tabs on this screen');
+    // The tracker runs in the open website tab and shows its notice until recording starts.
+    await demo.waitForSelector('zoomcapture-indicator');
+    await (await button(studio, 'Start recording')).click();
+    await studio.waitForSelector('[role=timer]');
+    await demo.bringToFront();
+    await demo.waitForFunction(() => !document.querySelector('zoomcapture-indicator'));
+    await sleep(600);
+    await demo.mouse.move(120, 120, { steps: 4 });
+    await demo.mouse.click(200, 150);
+    await sleep(2500);
+    await demo.mouse.click(600, 400);
+    await sleep(1000);
+    await studio.bringToFront();
+    await (await button(studio, 'Stop')).click();
+    await studio.waitForSelector('xpath/.//h1[contains(., "Recording saved")]', { timeout: 30_000 });
+
+    const recording = (await readRecordings(studio)).sort((a, b) => b.createdAt - a.createdAt)[0];
+    assert.equal(recording.clickTracking.mode, 'screen');
+    assert.equal(recording.interactions.length, 2, JSON.stringify(recording.interactions));
+    const [first, second] = recording.interactions;
+    for (const click of recording.interactions) {
+      assert.ok(click.position.x > 0 && click.position.x < 1 && click.position.y > 0 && click.position.y < 1, JSON.stringify(click.position));
+    }
+    // Positions are on the screen: the second click is right of and below the first.
+    assert.ok(second.position.x > first.position.x && second.position.y > first.position.y);
+    assert.ok(second.timeMs - first.timeMs > 2000, `timestamps follow the clicks (${first.timeMs}, ${second.timeMs})`);
+    assert.ok((recording.cursor?.length ?? 0) > 0, 'pointer path recorded');
+    const project = await readProject(studio, recording.projectId);
+    assert.equal(project.zoom.mode, 'auto');
+    assert.equal(project.timeline.zoomMarkers.length, 2);
+    assert.deepEqual(project.timeline.zoomMarkers.map((m) => m.position), [first.position, second.position]);
+
+    // The editor shows the effects on the timeline and zooms the preview at a click.
+    const editor = await env.open(`editor/index.html?recording=${recording.id}`);
+    await editor.setViewport({ width: 1400, height: 900 });
+    await editor.bringToFront();
+    await editor.waitForSelector('[data-testid=zoom-track] button[aria-label^="Zoom effect at"]');
+    await seekEditor(editor, project.timeline.zoomMarkers[0].timeMs + 100);
+    const scale = await editor.$eval('[data-testid=zoom-canvas]', (c) => Number(c.dataset.scale));
+    assert.ok(scale > 1.5, `zoomed in at the first click (scale ${scale})`);
+    await openEffectsTab(editor);
+    await waitForText(editor, '2 clicks tracked in Chrome tabs');
+    await demo.close();
   });
 
   server.close();

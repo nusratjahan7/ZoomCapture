@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TrackedClick, TrackedPointerBatch } from '@/services/zoom/clicks';
-import { clickTrackingSupport } from '@/services/zoom/support';
+import { clickTrackingSupport, isTrackableUrl, SCREEN_TRACKING_ORIGINS, type TrackingScope } from '@/services/zoom/support';
 import type { CaptureTarget, SelectedSurface } from '@/types';
 import { getErrorMessage } from '@/utils/errors';
 
@@ -10,7 +10,9 @@ export type TrackingStatus =
   /** Not possible for this capture (screen, window, picked tab, disabled); `reason` says why. */
   | { state: 'unsupported'; reason: string }
   | { state: 'connecting' }
-  | { state: 'active'; origin: string }
+  /** Entire screen: Chrome must first allow ZoomCapture to observe clicks on websites. */
+  | { state: 'needs-permission' }
+  | { state: 'active'; origin: string; scope?: TrackingScope }
   /** The page navigated and ZoomCapture's temporary access ended; can be resumed per site. */
   | { state: 'paused'; reason: string; origin: string }
   | { state: 'error'; reason: string };
@@ -25,16 +27,17 @@ function isTrackerMessage(message: unknown): message is TrackerMessage {
   return typeof message === 'object' && message !== null && (message as TrackerMessage).channel === 'tracker';
 }
 
-async function inject(tabId: number, sessionId: string, recording: boolean): Promise<void> {
+async function inject(tabId: number, sessionId: string, recording: boolean, scope: TrackingScope = 'tab'): Promise<void> {
   await chrome.scripting.executeScript({ target: { tabId }, files: [TRACKER_FILE] });
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: (id: string, active: boolean) =>
+    func: (id: string, active: boolean, area: string) =>
       (window as unknown as { __zoomCaptureTracker?: { start: (c: object) => void } }).__zoomCaptureTracker?.start({
         sessionId: id,
         recording: active,
+        scope: area,
       }),
-    args: [sessionId, recording],
+    args: [sessionId, recording, scope],
   });
 }
 
@@ -149,6 +152,117 @@ export function useClickTracking(input: {
     return granted;
   }, [status, attach]);
 
-  const effective: TrackingStatus = support.supported ? status : { state: 'unsupported', reason: support.reason };
-  return { status: effective, allowOnSite };
+  const screen = useScreenTracking({
+    sessionId,
+    active: support.supported && support.scope === 'screen',
+    recording,
+    recordingRef,
+    onClick: (click) => onClickRef.current(click),
+    onPointer: (batch) => onPointerRef.current(batch),
+  });
+
+  const effective: TrackingStatus = !support.supported
+    ? { state: 'unsupported', reason: support.reason }
+    : support.scope === 'screen'
+      ? screen.status
+      : status;
+  return { status: effective, allowOnSite, allowScreen: screen.allow, scope: support.supported ? support.scope : null };
+}
+
+const SCREEN_LABEL = 'Chrome tabs on this screen';
+
+/**
+ * Entire-screen recording: runs the tracker in every website tab (once the user allows access to
+ * websites), including tabs opened or reloaded while recording. Positions are reported relative to
+ * the screen, so they line up with the recorded picture. Clicks outside Chrome are not seen.
+ */
+function useScreenTracking(input: {
+  sessionId: string | null;
+  active: boolean;
+  recording: boolean;
+  recordingRef: { current: boolean };
+  onClick: (click: TrackedClick) => void;
+  onPointer: (batch: TrackedPointerBatch) => void;
+}) {
+  const { sessionId, active, recording, recordingRef } = input;
+  const [granted, setGranted] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const injected = useRef(new Set<number>());
+  const handlers = useRef(input);
+  handlers.current = input;
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    void chrome.permissions
+      .contains({ origins: SCREEN_TRACKING_ORIGINS })
+      .then((has) => !cancelled && setGranted(has))
+      .catch(() => !cancelled && setGranted(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
+
+  const running = active && granted === true && sessionId !== null;
+
+  useEffect(() => {
+    if (!running || !sessionId) return;
+    const tabs = injected.current;
+    const attach = async (tab: chrome.tabs.Tab) => {
+      if (tab.id === undefined || !isTrackableUrl(tab.url) || tab.discarded) return;
+      try {
+        await inject(tab.id, sessionId, recordingRef.current, 'screen');
+        tabs.add(tab.id);
+      } catch {
+        // A tab that can't be scripted (e.g. still loading, or an error page) is skipped.
+      }
+    };
+    void chrome.tabs
+      .query({})
+      .then((all) => Promise.all(all.map(attach)))
+      .catch((reason: unknown) => setError(`Click tracking could not start: ${getErrorMessage(reason)}`));
+    const onUpdated = (_id: number, change: { status?: string }, tab: chrome.tabs.Tab) => {
+      if (change.status === 'complete') void attach(tab);
+    };
+    const onRemoved = (tabId: number) => tabs.delete(tabId);
+    const onMessage = (message: unknown, sender: chrome.runtime.MessageSender) => {
+      if (!isTrackerMessage(message) || sender.tab?.id === undefined || message.sessionId !== sessionId) return false;
+      if (message.type === 'pointer') handlers.current.onPointer(message.batch);
+      else if (message.type === 'click') handlers.current.onClick(message.click);
+      return false;
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    chrome.runtime.onMessage.addListener(onMessage);
+    return () => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+      chrome.runtime.onMessage.removeListener(onMessage);
+      for (const tabId of tabs) sendControl(tabId, { sessionId, action: 'stop' });
+      tabs.clear();
+    };
+  }, [running, sessionId, recordingRef]);
+
+  // The on-page notices hide while recording so they never appear in the video.
+  useEffect(() => {
+    if (!running || !sessionId) return;
+    for (const tabId of injected.current) sendControl(tabId, { sessionId, action: 'recording', active: recording });
+  }, [running, sessionId, recording]);
+
+  /** Asks Chrome for access to websites (optional host permission). Must be called from a click. */
+  const allow = useCallback(async () => {
+    const ok = await chrome.permissions.request({ origins: SCREEN_TRACKING_ORIGINS }).catch(() => false);
+    setGranted(ok);
+    return ok;
+  }, []);
+
+  const status: TrackingStatus =
+    error !== null
+      ? { state: 'error', reason: error }
+      : granted === null
+        ? { state: 'connecting' }
+        : granted
+          ? { state: 'active', origin: SCREEN_LABEL, scope: 'screen' }
+          : { state: 'needs-permission' };
+  return { status, allow };
 }

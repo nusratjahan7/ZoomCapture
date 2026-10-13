@@ -3,7 +3,7 @@
 // rendered file shows the same zoom at the same timestamps as the preview, with audio in sync.
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { button, dialogButton, readRecordings, sleep, waitForText } from './lib.mjs';
+import { button, dialogButton, openEffectsTab, openPanel, readRecordings, seekEditor, sleep, waitForText, waitSaved } from './lib.mjs';
 
 /**
  * A page with a strongly structured picture (a coloured grid, so zoom position is measurable) that
@@ -57,33 +57,35 @@ function readProject(page, projectId) {
 }
 
 /**
- * A 48×36 RGB thumbnail of what is on screen at time `t` (seconds), from either the preview canvas
- * (after seeking the preview's video) or the rendered video. Comparing thumbnails ignores
- * compression noise and resolution differences while staying sensitive to zoom and position.
+ * A 48×36 RGB thumbnail of what is on screen at time `t` (seconds): the preview canvas or the
+ * recording's own frame (both after moving the editor's playhead there), or the rendered video.
+ * Comparing thumbnails ignores compression noise and resolution differences while staying
+ * sensitive to zoom and position.
  */
 function thumbnailAt(page, which, t) {
   return page.evaluate(
     async (which, t) => {
-      const seek = (video, time) =>
-        new Promise((resolve) => {
-          if (Math.abs(video.currentTime - time) < 1e-6 && !video.seeking) return resolve();
-          video.addEventListener('seeked', () => resolve(), { once: true });
-          video.currentTime = time;
-        });
       const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       let image;
       if (which === 'rendered') {
         image = document.querySelector('[data-testid=rendered-video]');
         image.pause();
-        await seek(image, t);
-      } else {
-        const video = document.querySelector('video[aria-label$="recording"]');
-        image = which === 'original' ? video : document.querySelector('[data-testid=zoom-canvas]');
-        video.pause();
-        await seek(video, t);
-        if (which === 'preview') {
-          for (let i = 0; i < 100 && Math.abs(Number(image.dataset.time) - t * 1000) > 1; i++) await frame();
+        if (Math.abs(image.currentTime - t) > 1e-6) {
+          await new Promise((resolve) => {
+            image.addEventListener('seeked', () => resolve(), { once: true });
+            image.currentTime = t;
+          });
         }
+      } else {
+        // Type the time into the playhead field, as a user would.
+        const input = document.querySelector('input[data-testid=playhead]');
+        const seconds = t;
+        input.value = `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(3)}`;
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        const canvas = document.querySelector('[data-testid=zoom-canvas]');
+        const video = document.querySelector('[data-testid=preview-stage] video');
+        for (let i = 0; i < 200 && (Math.abs(Number(canvas.dataset.time) - t * 1000) > 1 || !video || video.seeking || video.readyState < 2); i++) await frame();
+        image = which === 'original' ? video : canvas;
       }
       await frame();
       const canvas = new OffscreenCanvas(48, 36);
@@ -184,17 +186,16 @@ export async function runModule05(test, getEnv, relaunch) {
     const env = getEnv();
     const { recording } = state;
     const editor = await env.open(`editor/index.html?recording=${recording.id}`);
-    await editor.setViewport({ width: 1400, height: 1000 });
+    await editor.setViewport({ width: 1440, height: 1000 });
     await editor.bringToFront();
     await editor.waitForSelector('[data-testid=zoom-canvas]');
-    await waitForText(editor, 'Zoom effects');
+    await editor.waitForSelector('[data-testid=preview-stage] video');
     const [c1, c2] = recording.interactions.map((e) => e.timeMs);
     const canvasState = () =>
       editor.$eval('[data-testid=zoom-canvas]', (c) => ({ time: Number(c.dataset.time), scale: Number(c.dataset.scale), offset: c.dataset.offset }));
 
     // Seeking while paused: the zoom at a marker is applied, positioned inside the frame at the corner.
-    await editor.evaluate((ms) => (document.querySelector('video[aria-label$="recording"]').currentTime = ms / 1000), c1 + 300);
-    await editor.waitForFunction((ms) => Math.abs(Number(document.querySelector('[data-testid=zoom-canvas]').dataset.time) - ms) < 1, {}, c1 + 300);
+    await seekEditor(editor, c1 + 300);
     const atCorner = await canvasState();
     assert.equal(atCorner.scale, 2);
     assert.equal(atCorner.offset, '0.0000,0.0000', 'top-left click: the view starts at the corner, nothing beyond the frame');
@@ -202,18 +203,19 @@ export async function runModule05(test, getEnv, relaunch) {
     // Playback (at 2× speed): the canvas keeps drawing as media time advances.
     await editor.select('xpath/.//label[contains(., "Speed")]/select', '2');
     const before = (await canvasState()).time;
-    await editor.click('button[aria-label="Play"]');
+    await editor.click('button[aria-label^="Play"]');
     await sleep(700);
-    await editor.click('button[aria-label="Pause"]');
+    await editor.click('button[aria-label^="Pause"]');
     const after = (await canvasState()).time;
     assert.ok(after - before > 900, `played ~1.4 s of media in 0.7 s at 2× (${before} → ${after})`);
-    assert.equal(await editor.$eval('video[aria-label$="recording"]', (v) => v.playbackRate), 2);
+    assert.equal(await editor.$eval('[data-testid=preview-stage] video', (v) => v.playbackRate), 2);
     await editor.select('xpath/.//label[contains(., "Speed")]/select', '1');
 
-    // Scrubbing: dragging along the timeline moves the preview with the pointer.
-    const track = await editor.$('[data-testid=zoom-track]');
-    const box = await track.boundingBox();
-    const xFor = (ms) => box.x + (ms / recording.durationMs) * box.width;
+    // Scrubbing: dragging along the time ruler moves the preview with the pointer.
+    const ruler = await editor.$('[data-testid=time-ruler]');
+    const box = await ruler.boundingBox();
+    const pxPerMs = await ruler.evaluate((element) => Number(element.dataset.pxPerMs));
+    const xFor = (ms) => box.x + ms * pxPerMs;
     await editor.mouse.move(xFor(500), box.y + 4);
     await editor.mouse.down();
     for (const ms of [1500, 2500, c2 + 200]) {
@@ -230,55 +232,31 @@ export async function runModule05(test, getEnv, relaunch) {
     assert.equal(scrubbed.offset, '1.0000,1.0000', 'bottom-right click: the view ends at the corner');
 
     // Make the first effect follow the cursor (the pointer moved during its hold).
+    await openEffectsTab(editor);
     await editor.click('ul[aria-label="Zoom effects"] li:first-child button[aria-label^="Edit"]');
-    await editor.waitForSelector('dialog[open] form');
-    await (await editor.$('xpath/.//dialog[@open]//button[@role="radio"][contains(., "Follow cursor")]')).click();
-    await (await dialogButton(editor, 'Save effect')).click();
-    await waitForText(editor, 'Zoom effect saved');
+    await (await editor.waitForSelector('xpath/.//aside[@aria-label="Properties"]//button[@role="radio"][contains(., "Follow cursor")]')).click();
 
     // Drag the second effect 300 ms later on the timeline.
     const project = await readProject(editor, recording.projectId);
     const second = project.timeline.zoomMarkers[1];
-    const handle = await editor.$(`[data-testid=zoom-track] button:nth-of-type(2)`);
+    const handle = await editor.$('[data-testid=zoom-track] > div:nth-of-type(2) > button');
     const handleBox = await handle.boundingBox();
-    const dx = (300 / recording.durationMs) * box.width;
+    const dx = 300 * pxPerMs;
     await editor.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
     await editor.mouse.down();
     await editor.mouse.move(handleBox.x + handleBox.width / 2 + dx, handleBox.y + handleBox.height / 2, { steps: 5 });
     await editor.mouse.up();
-    await editor.waitForFunction(
-      async (id, expected) => {
-        const request = indexedDB.open('zoomcapture');
-        const db = await new Promise((r) => (request.onsuccess = () => r(request.result)));
-        const projects = await new Promise((r) => {
-          const q = db.transaction('projects').objectStore('projects').getAll();
-          q.onsuccess = () => r(q.result);
-        });
-        db.close();
-        const marker = projects.flatMap((p) => p.timeline.zoomMarkers).find((m) => m.id === id);
-        return marker && Math.abs(marker.timeMs - expected) < 60;
-      },
-      { polling: 200, timeout: 10_000 },
-      second.id,
-      second.timeMs + 300,
-    );
+    await waitSaved(editor);
+    const moved = (await readProject(editor, recording.projectId)).timeline.zoomMarkers.find((m) => m.id === second.id);
+    assert.ok(Math.abs(moved.timeMs - (second.timeMs + 300)) < 60, `moved ${second.timeMs} → ${moved.timeMs}`);
+    assert.equal((await readProject(editor, recording.projectId)).timeline.zoomMarkers[0].positionMode, 'follow-cursor');
 
-    // Overlays: turn on the cursor highlight (saved with the project).
-    await (await editor.$('xpath/.//*[@role="switch"][.//*[contains(., "Cursor highlight")] or contains(., "Cursor highlight")]')).click();
-    await editor.waitForFunction(
-      async (id) => {
-        const request = indexedDB.open('zoomcapture');
-        const db = await new Promise((r) => (request.onsuccess = () => r(request.result)));
-        const project = await new Promise((r) => {
-          const q = db.transaction('projects').objectStore('projects').get(id);
-          q.onsuccess = () => r(q.result);
-        });
-        db.close();
-        return project.renderEffects?.cursorHighlight === true;
-      },
-      { polling: 200, timeout: 10_000 },
-      recording.projectId,
-    );
+    // Overlays: turn on the cursor highlight (Cursor panel).
+    await editor.keyboard.press('Escape');
+    await openPanel(editor, 'Cursor');
+    await (await editor.waitForSelector('xpath/.//aside[@aria-label="Cursor & clicks"]//*[@role="switch"][contains(., "Cursor highlight")]')).click();
+    await waitSaved(editor);
+    assert.equal((await readProject(editor, recording.projectId)).renderEffects?.cursorHighlight, true);
     state.editor = editor;
     state.project = await readProject(editor, recording.projectId);
   });
@@ -286,15 +264,14 @@ export async function runModule05(test, getEnv, relaunch) {
   await test('module 05 render: the rendered video matches the preview frame for frame, with audio in sync', async () => {
     const { editor, recording, project } = state;
     await editor.bringToFront();
-    await (await button(editor, 'Render video')).click();
+    await (await button(editor, 'Export video')).click();
     await editor.waitForSelector('dialog[open]');
-    await waitForText(editor, 'Render video with zoom');
     await (await dialogButton(editor, 'Render')).click();
     await editor.waitForSelector('[data-testid=rendered-video]', { timeout: 120_000 });
     await editor.waitForFunction(() => document.querySelector('[data-testid=rendered-video]').readyState >= 2);
     const summary = await editor.$eval('[data-testid=render-summary]', (p) => p.textContent);
     assert.match(summary, /30 fps/);
-    assert.match(summary, /original audio/, `audio copied unchanged: ${summary}`);
+    assert.match(summary, /audio mixed/, `audio included: ${summary}`);
 
     const renderedDuration = await editor.$eval('[data-testid=rendered-video]', (v) => v.duration);
     assert.ok(Math.abs(renderedDuration - recording.durationMs / 1000) < 0.15, `duration ${renderedDuration} s vs ${recording.durationMs / 1000} s`);
@@ -349,7 +326,8 @@ export async function runModule05(test, getEnv, relaunch) {
     }, recording.screenAssetId);
     const click = recording.interactions[0].timeMs / 1000;
     assert.ok(onsets.original !== null && Math.abs(onsets.original - click) < 0.3, `beep in the original near the click: ${JSON.stringify(onsets)} click ${click}`);
-    assert.ok(Math.abs(onsets.rendered - onsets.original) < 0.01, `audio not shifted: ${JSON.stringify(onsets)}`);
+    // The audio is mixed and re-encoded: allow one Opus frame (20 ms).
+    assert.ok(Math.abs(onsets.rendered - onsets.original) < 0.02, `audio not shifted: ${JSON.stringify(onsets)}`);
 
     const firstBright = async (which) => {
       for (let t = onFrame(click - 0.3); t < click + 0.6; t += 1 / FPS) {

@@ -19,7 +19,14 @@ export function isTrackableUrl(url: string | undefined): boolean {
   return true;
 }
 
-export type TrackingSupport = { supported: true } | { supported: false; reason: string };
+/**
+ * `tab`: the tab ZoomCapture was opened on (positions relative to its viewport).
+ * `screen`: the entire screen; clicks are observed in Chrome tabs on it (positions relative to
+ * the screen). Clicks in other applications can't be seen by an extension.
+ */
+export type TrackingScope = 'tab' | 'screen';
+
+export type TrackingSupport = { supported: true; scope: TrackingScope } | { supported: false; reason: string };
 
 export interface TrackingSupportInput {
   /** Click tracking enabled in Settings. */
@@ -32,8 +39,6 @@ export interface TrackingSupportInput {
 
 export const UNSUPPORTED_REASONS = {
   disabled: 'Click tracking is turned off in Settings.',
-  screen:
-    'Clicks can’t be tracked when recording the entire screen: Chrome extensions can only observe clicks inside a browser tab. Add zoom effects in the editor instead.',
   window:
     'Clicks can’t be tracked when recording a window: Chrome extensions can only observe clicks inside a browser tab. Add zoom effects in the editor instead.',
   pickedTab:
@@ -42,16 +47,21 @@ export const UNSUPPORTED_REASONS = {
 } as const;
 
 /**
- * Whether clicks can be tracked for this capture. Only one case is supported: recording the tab
- * on which the user opened ZoomCapture (the toolbar click grants `activeTab`, which lets the
- * extension both capture that exact tab and run the click tracker in it). Everything else has a
- * clear reason and falls back to adding zoom effects manually.
+ * Whether clicks can be tracked for this capture:
+ * - the tab on which the user opened ZoomCapture (the toolbar click grants `activeTab`, which lets
+ *   the extension both capture that exact tab and run the click tracker in it);
+ * - the entire screen, inside Chrome tabs, once the user allows access to websites (optional
+ *   host permission). Clicks in other applications are not seen.
+ * Everything else has a clear reason and falls back to adding zoom effects manually.
  */
 export function clickTrackingSupport({ trackClicks, surface, capturedTarget }: TrackingSupportInput): TrackingSupport {
   if (!trackClicks) return { supported: false, reason: UNSUPPORTED_REASONS.disabled };
   if (surface === null) return { supported: false, reason: UNSUPPORTED_REASONS.noSource };
-  if (surface === 'monitor') return { supported: false, reason: UNSUPPORTED_REASONS.screen };
+  if (surface === 'monitor') return { supported: true, scope: 'screen' };
   if (surface === 'window') return { supported: false, reason: UNSUPPORTED_REASONS.window };
   if (!capturedTarget) return { supported: false, reason: UNSUPPORTED_REASONS.pickedTab };
-  return { supported: true };
+  return { supported: true, scope: 'tab' };
 }
+
+/** Websites the tracker may run on while recording the entire screen (optional host permission). */
+export const SCREEN_TRACKING_ORIGINS = ['https://*/*', 'http://*/*'];

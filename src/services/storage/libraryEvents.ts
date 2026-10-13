@@ -6,7 +6,9 @@
 const CHANNEL = 'zoomcapture-library';
 
 export type LibraryChange =
-  | { type: 'saved' | 'renamed' | 'deleted' | 'thumbnail' | 'project'; recordingId: string }
+  | { type: 'saved' | 'renamed' | 'deleted' | 'thumbnail'; recordingId: string }
+  /** `source` identifies the page that saved, so an editor can tell its own saves from others'. */
+  | { type: 'project'; recordingId: string; source?: string }
   | { type: 'drafts' };
 
 export function notifyLibraryChanged(change: LibraryChange): void {

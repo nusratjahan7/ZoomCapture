@@ -20,9 +20,10 @@ export interface FloatingControlsProps {
   onToggleCamera: () => void;
 }
 
+/** Requested window sizes (Chrome may enforce a slightly larger minimum). */
 export const FLOATING_SIZE = {
-  withCamera: { width: 240, height: 312 },
-  controlsOnly: { width: 320, height: 76 },
+  withCamera: { width: 176, height: 216 },
+  controlsOnly: { width: 216, height: 44 },
 };
 
 /**
@@ -46,7 +47,7 @@ export function FloatingControls({
   const live = phase === 'recording' || phase === 'paused';
 
   return (
-    <div className="flex h-screen flex-col gap-2 bg-canvas p-2 select-none">
+    <div className="flex h-screen flex-col gap-1.5 bg-canvas p-1 select-none">
       {camera && (
         <div className="relative flex min-h-0 flex-1 items-center justify-center">
           <div className="aspect-square h-full max-w-full overflow-hidden rounded-full border-2 border-white/70 bg-surface-3">
@@ -61,7 +62,7 @@ export function FloatingControls({
           {phase === 'countdown' && (
             <span
               aria-live="assertive"
-              className="absolute inset-0 flex items-center justify-center text-6xl font-bold text-white drop-shadow-lg"
+              className="absolute inset-0 flex items-center justify-center text-5xl font-bold text-white drop-shadow-lg"
             >
               {countdown}
             </span>
@@ -69,13 +70,13 @@ export function FloatingControls({
         </div>
       )}
 
-      <div className="flex h-[60px] shrink-0 items-center gap-1 rounded-xl border border-line bg-surface px-2">
+      <div className="flex h-9 shrink-0 items-center gap-0.5 rounded-lg border border-line bg-surface px-1.5 [&_button]:size-7">
         <span
           aria-hidden
-          className={cn('ml-1 size-2.5 rounded-full', phase === 'recording' ? 'animate-pulse bg-rec' : 'bg-warning')}
+          className={cn('ml-0.5 size-2 shrink-0 rounded-full', phase === 'recording' ? 'animate-pulse bg-rec' : 'bg-warning')}
         />
-        <span className="ml-1.5 flex-1 font-mono text-sm font-semibold tabular-nums" role="timer" aria-live="off">
-          {phase === 'countdown' ? `Starting in ${countdown}` : phase === 'saving' ? 'Saving…' : formatClock(elapsedMs)}
+        <span className="ml-1 min-w-0 flex-1 truncate font-mono text-xs font-semibold tabular-nums" role="timer" aria-live="off">
+          {phase === 'countdown' ? `Starts in ${countdown}` : phase === 'saving' ? 'Saving…' : formatClock(elapsedMs)}
         </span>
         {live && (
           <>
