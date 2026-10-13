@@ -58,7 +58,8 @@ export async function runModule04(test, getEnv, relaunch) {
       cameraEnabled: false,
       microphoneEnabled: false,
       countdownSeconds: 0,
-      floatingControls: false,
+      floatingControls: true,
+      hideFloatingWhileRecording: true,
       autoZoom: { enabled: true, trackClicks: true, scale: 2, durationMs: 2000, transitionSpeed: 'fast' },
     });
     const demo = await env.browser.newPage();
@@ -92,6 +93,10 @@ export async function runModule04(test, getEnv, relaunch) {
     await studio.waitForSelector('[role=timer]');
     // …and hides the notice while recording so it is not in the video.
     await demo.waitForFunction(() => !document.querySelector('zoomcapture-indicator'));
+    // A tab recording never includes the floating controls, so they stay open while recording.
+    await studio.waitForFunction(() => Boolean(documentPictureInPicture.window));
+    await sleep(1000);
+    assert.ok(await studio.evaluate(() => Boolean(documentPictureInPicture.window)), 'floating controls stay open for a tab recording');
 
     await demo.bringToFront();
     const clickAt = async (x, y) => {

@@ -21,8 +21,9 @@ export interface UserSettings {
   /** Open an always-on-top Picture-in-Picture window with the camera bubble and controls. */
   floatingControls: boolean;
   /**
-   * Close the floating window when recording starts, so it never appears in a screen recording
-   * (it shows only during the countdown). Recording is then controlled from the toolbar icon.
+   * When recording the entire screen, close the floating window as recording starts so it never
+   * appears in the video (it shows only during the countdown). Tab and window captures don't
+   * include it, so it stays open for them.
    */
   hideFloatingWhileRecording: boolean;
   /** Last camera bubble placement; copied into each new project. */

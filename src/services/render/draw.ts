@@ -1,4 +1,4 @@
-import { CAMERA_BUBBLE_SCALE, type CameraLayout, type TextClip, type TextSize } from '@/types';
+import { cameraBubbleScale, type CameraLayout, type TextClip, type TextSize } from '@/types';
 import { sourceCrop } from './camera';
 import type { Rect } from './compose';
 import type { FrameState } from './frameState';
@@ -230,7 +230,7 @@ function fitText(ctx: Context2D, text: string, maxWidth: number): string {
 
 /** Round, mirrored camera bubble, as placed during recording. Not affected by zoom. */
 function drawCameraBubble(ctx: Context2D, width: number, height: number, camera: FrameImage, layout: CameraLayout) {
-  const diameter = CAMERA_BUBBLE_SCALE[layout.size] * width;
+  const diameter = cameraBubbleScale(layout) * width;
   const cx = layout.x * width;
   const cy = layout.y * height;
   const side = Math.min(camera.width, camera.height);

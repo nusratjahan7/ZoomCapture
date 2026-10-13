@@ -175,8 +175,8 @@ export function SettingsPage() {
                 />
                 <Toggle
                   icon={EyeOff}
-                  label="Hide it while recording"
-                  description="Closes the floating window when recording starts, so it doesn’t appear in recordings of your screen. Pause or stop from the ZoomCapture toolbar icon or the studio tab."
+                  label="Hide it while recording the entire screen"
+                  description="A tab or window recording never includes the floating window, so it stays on screen. An entire-screen recording captures everything visible, so the window closes when recording starts. Pause or stop from the ZoomCapture toolbar icon or the studio tab."
                   checked={settings.hideFloatingWhileRecording}
                   disabled={!settings.floatingControls}
                   onCheckedChange={(hideFloatingWhileRecording) => save({ hideFloatingWhileRecording })}

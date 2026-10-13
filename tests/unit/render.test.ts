@@ -12,6 +12,7 @@ import {
   type Camera,
 } from '@/services/render/camera';
 import { drawFrame } from '@/services/render/draw';
+import { CAMERA_BUBBLE_LIMITS, CAMERA_BUBBLE_SCALE, cameraBubbleScale } from '@/types';
 import {
   cameraAt,
   CLICK_EMPHASIS_MS,
@@ -410,6 +411,24 @@ describe('drawing a frame', () => {
     const draw = withCamera.calls.find(([name]) => name === 'drawImage')!;
     // Centre-cropped square from the 640×480 camera frame, 20 % of the output width.
     expect(draw[1]).toEqual([camera, 80, 0, 480, 480, -128, -128, 256, 256]);
+  });
+
+  it('draws a resized camera bubble at its own size', () => {
+    const state = frameStateAt(scene([]), 0);
+    const ctx = mockContext();
+    const camera = {} as CanvasImageSource;
+    drawFrame(ctx, 1280, 720, { layers: [], camera: { image: camera, width: 640, height: 480 }, cameraLayout: { x: 0.5, y: 0.5, size: 'medium', scale: 0.3 } }, state);
+    const draw = ctx.calls.find(([name]) => name === 'drawImage')!;
+    // 30 % of 1280 px wide (the free size overrides the preset).
+    expect(draw[1]).toEqual([camera, 80, 0, 480, 480, -192, -192, 384, 384]);
+  });
+
+  it('keeps camera bubble sizes within the limits', () => {
+    expect(cameraBubbleScale({ x: 0.5, y: 0.5, size: 'small' })).toBe(CAMERA_BUBBLE_SCALE.small);
+    expect(cameraBubbleScale({ x: 0.5, y: 0.5, size: 'small', scale: 0.25 })).toBe(0.25);
+    expect(cameraBubbleScale({ x: 0.5, y: 0.5, size: 'medium', scale: 0.01 })).toBe(CAMERA_BUBBLE_LIMITS.min);
+    expect(cameraBubbleScale({ x: 0.5, y: 0.5, size: 'medium', scale: 0.9 })).toBe(CAMERA_BUBBLE_LIMITS.max);
+    expect(cameraBubbleScale({ x: 0.5, y: 0.5, size: 'medium', scale: Number.NaN })).toBe(CAMERA_BUBBLE_SCALE.medium);
   });
 
   it('draws click emphasis, cursor highlight and annotations through the camera', () => {

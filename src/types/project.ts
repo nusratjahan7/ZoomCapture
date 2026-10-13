@@ -56,11 +56,23 @@ export type CameraBubbleSize = 'small' | 'medium' | 'large';
 /** Bubble diameter as a fraction of the frame width. */
 export const CAMERA_BUBBLE_SCALE: Record<CameraBubbleSize, number> = { small: 0.14, medium: 0.2, large: 0.28 };
 
+/** Smallest and largest bubble diameter (fraction of the frame width) when resized freely. */
+export const CAMERA_BUBBLE_LIMITS = { min: 0.08, max: 0.4 } as const;
+
 /** Placement of the camera bubble over the screen video. `x`/`y` is its centre, normalised 0-1. */
 export interface CameraLayout {
   x: number;
   y: number;
+  /** Preset size; used when `scale` is not set. */
   size: CameraBubbleSize;
+  /** Diameter as a fraction of the frame width, set by resizing the bubble. Overrides `size`. */
+  scale?: number;
+}
+
+/** The bubble's diameter as a fraction of the frame width. */
+export function cameraBubbleScale(layout: CameraLayout): number {
+  const scale = layout.scale ?? CAMERA_BUBBLE_SCALE[layout.size];
+  return Math.min(CAMERA_BUBBLE_LIMITS.max, Math.max(CAMERA_BUBBLE_LIMITS.min, Number.isFinite(scale) ? scale : CAMERA_BUBBLE_SCALE.medium));
 }
 
 /**
