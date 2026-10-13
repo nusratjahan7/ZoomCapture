@@ -17,9 +17,10 @@ import {
   type VideoSample,
 } from 'mediabunny';
 import { safeFileName } from '@/services/export/exporters';
-import { clipDuration, contentDuration, isMediaClip } from '@/services/timeline/model';
+import { clipDuration, contentDuration, isMediaClip, isStill } from '@/services/timeline/model';
 import type { Size } from '@/services/zoom/coordinates';
 import type { ExportSettings, MediaAsset, MediaClip, Project, Recording, Timeline } from '@/types';
+import { StillCache, type StillSource } from './stills';
 import { activeVisuals, contentRect, frameSize, timelineScene } from './compose';
 import { drawFrame, type FrameImage } from './draw';
 import { frameStateAt } from './frameState';
@@ -172,7 +173,7 @@ export function audibleClips(timeline: Timeline, assets: ReadonlyMap<string, Med
     for (const clip of track.clips) {
       if (!isMediaClip(clip) || clip.muted || (clip.volume ?? 1) <= 0) continue;
       const asset = assets.get(clip.assetId);
-      if (!asset || asset.kind === 'image' || asset.hasAudio === false) continue;
+      if (!asset || isStill(asset) || asset.hasAudio === false) continue;
       result.push({ clip, asset });
     }
   }
@@ -252,7 +253,21 @@ export async function renderProject(
   const inputs = new Map<string, Input>();
   const tracks = new Map<string, InputVideoTrack | null>();
   const cursors = new Map<string, FrameCursor<VideoSample>>();
-  const images = new Map<string, ImageBitmap>();
+  // Images and PDF pages, decoded at the output size, a few at a time (see stills.ts).
+  const stills = new StillCache(8);
+  const stillSource = (clip: MediaClip): StillSource | null => {
+    const asset = assetMap.get(clip.assetId);
+    const blob = job.blobs.get(clip.assetId);
+    if (!asset || !blob || !isStill(asset)) return null;
+    return {
+      assetId: asset.id,
+      kind: asset.kind === 'pdf' ? 'pdf' : 'image',
+      page: clip.page,
+      size: asset.width && asset.height ? { width: asset.width, height: asset.height } : undefined,
+      load: async () => blob,
+    };
+  };
+  const stillWarnings = new Set<string>();
   let output: Output | null = null;
 
   /** Opens a video asset once; null (with a warning) if it can't be decoded. Fails for the recording itself. */
@@ -295,16 +310,13 @@ export async function renderProject(
       for (const clip of track.clips) {
         if (!isMediaClip(clip)) continue;
         const asset = assetMap.get(clip.assetId);
-        if (asset?.kind === 'image') {
-          if (!images.has(asset.id)) {
-            const blob = job.blobs.get(asset.id);
-            try {
-              if (!blob) throw new Error('missing');
-              images.set(asset.id, await createImageBitmap(blob));
-            } catch {
-              warnings.push(`The image “${asset.label ?? 'image'}” couldn't be read, so it is left out.`);
-            }
-          }
+        if (asset && isStill(asset)) {
+          // Each file is checked once (its first page used); pages are drawn later, as needed.
+          if (stillWarnings.has(asset.id)) continue;
+          stillWarnings.add(asset.id);
+          const still = stillSource(clip);
+          const bitmap = still ? await stills.get(still, { width: 256, height: 256 }) : null;
+          if (!bitmap) warnings.push(`${asset.kind === 'pdf' ? 'The PDF' : 'The image'} “${asset.label ?? asset.kind}” couldn't be read, so it is left out.`);
         } else {
           await videoTrackOf(clip.assetId);
         }
@@ -356,7 +368,8 @@ export async function renderProject(
         let camera: VideoSample | null = null;
         try {
           for (const { track, clip, sourceMs } of visuals.layers) {
-            layers.push(images.get(clip.assetId) ?? (await frameOf(track.id, clip, sourceMs)));
+            const still = stillSource(clip);
+            layers.push(still ? await stills.get(still, content) : await frameOf(track.id, clip, sourceMs));
           }
           if (visuals.camera && settings.includeCamera) camera = await frameOf(visuals.camera.track.id, visuals.camera.clip, visuals.camera.sourceMs);
           // VideoFrames from `toCanvasImageSource` must be used immediately: converted right here.
@@ -419,6 +432,6 @@ export async function renderProject(
   } finally {
     for (const cursor of cursors.values()) await cursor.close().catch(() => undefined);
     for (const input of inputs.values()) input.dispose();
-    for (const image of images.values()) image.close();
+    stills.clear();
   }
 }

@@ -150,9 +150,14 @@ async function commitRecording(draft: RecordingDraft): Promise<FinalizeResult> {
     const project = newProject(draft.projectId!, recording.id, now);
     if (draft.autoZoom) project.zoom = zoomSettingsFrom(draft.autoZoom, recording.clickTracking.mode !== 'unsupported');
     // Zoom markers live in the editable project, generated from (but independent of) the clicks.
+    const tracks = buildTimeline(assets);
+    // Effects made from clicks zoom into the screen recording: they belong to its clip.
+    const screenClipId = tracks.find((track) => track.kind === 'video')?.clips[0]?.id;
     const zoomMarkers =
-      project.zoom.mode === 'auto' ? generateZoomMarkers(recording.interactions, project.zoom, recording.durationMs, now) : [];
-    project.timeline = { durationMs: recording.durationMs, tracks: buildTimeline(assets), zoomMarkers };
+      project.zoom.mode === 'auto'
+        ? generateZoomMarkers(recording.interactions, project.zoom, recording.durationMs, now).map((marker) => ({ ...marker, clipId: screenClipId }))
+        : [];
+    project.timeline = { durationMs: recording.durationMs, tracks, zoomMarkers };
     project.cameraLayout = assets.some((asset) => asset.kind === 'camera') ? draft.cameraLayout : undefined;
 
     // `add` (not `put`): an id collision fails loudly instead of overwriting another recording.

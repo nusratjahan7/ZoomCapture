@@ -1,9 +1,10 @@
-import { clipAt, contentDuration } from '@/services/timeline/model';
+import { clipAt, contentDuration, isStill } from '@/services/timeline/model';
 import type { Size } from '@/services/zoom/coordinates';
 import type { CameraLayout, MediaAssetKind, MediaClip, Timeline, TimelineTrack } from '@/types';
 import { activeVisuals, contentRect } from './compose';
 import { drawFrame, type FrameImage } from './draw';
 import { frameStateAt, type FrameState, type RenderScene } from './frameState';
+import { StillCache } from './stills';
 
 /** What the player shows; replaced as a whole whenever the project changes. */
 export interface PlayerContent {
@@ -15,8 +16,8 @@ export interface PlayerContent {
   source: Size;
   /** Width / height of the output frame. */
   aspect: number;
-  /** Playable URL and kind of every asset on the timeline. */
-  assets: ReadonlyMap<string, { url: string; kind: MediaAssetKind }>;
+  /** Playable URL and kind of every asset on the timeline (and the size of images). */
+  assets: ReadonlyMap<string, { url: string; kind: MediaAssetKind; width?: number; height?: number }>;
 }
 
 interface TrackSlot {
@@ -46,10 +47,12 @@ export class TimelinePlayer {
   private readonly ctx: CanvasRenderingContext2D;
   private content: PlayerContent | null = null;
   private readonly slots = new Map<string, TrackSlot>();
-  private readonly images = new Map<string, HTMLImageElement>();
+  /** Images and PDF pages, decoded at preview size (a newly decoded one redraws the frame). */
+  private readonly stills = new StillCache(16, () => this.invalidate());
   private anchorTime = 0;
   private anchorNow = 0;
   private rate = 1;
+  private allMuted = false;
   private isPlaying = false;
   private frame = 0;
   private dirty = true;
@@ -139,6 +142,13 @@ export class TimelinePlayer {
     this.invalidate();
   }
 
+  /** Silences all playback (e.g. while a voiceover is recorded, so the microphone doesn't pick it up). */
+  setMuted(muted: boolean): void {
+    this.allMuted = muted;
+    for (const slot of this.slots.values()) if (muted) slot.element.muted = true;
+    this.invalidate();
+  }
+
   setRate(rate: number): void {
     this.anchorTime = this.time;
     this.anchorNow = performance.now();
@@ -158,7 +168,7 @@ export class TimelinePlayer {
     this.isPlaying = false;
     this.resizeObserver.disconnect();
     for (const [trackId, slot] of this.slots) this.releaseSlot(trackId, slot);
-    this.images.clear();
+    this.stills.clear();
     this.timeListeners.clear();
     this.content = null;
   }
@@ -234,19 +244,14 @@ export class TimelinePlayer {
     }
   }
 
-  /** Loads the clip's asset into the track's element and seeks it; returns the element (null for images). */
+  /** Loads the clip's asset into the track's element and seeks it; returns the element (null for stills). */
   private prepare(track: TimelineTrack, clip: MediaClip, time: number, current: boolean): HTMLMediaElement | null {
     const asset = this.content!.assets.get(clip.assetId);
     if (!asset) return null;
-    if (asset.kind === 'image') {
-      // The track's media element (if it played a video before) must fall silent.
+    if (isStill(asset)) {
+      // The track's media element (if it played a video before) must fall silent. Other tracks
+      // (voiceover, music) keep playing while the image or page is shown.
       if (current) this.slots.get(track.id)?.element.pause();
-      if (!this.images.has(clip.assetId)) {
-        const image = new Image();
-        image.onload = () => this.invalidate();
-        image.src = asset.url;
-        this.images.set(clip.assetId, image);
-      }
       return null;
     }
     const slot = this.slot(track);
@@ -261,7 +266,7 @@ export class TimelinePlayer {
     // so a newer position replaces a pending seek.
     if ((!element.seeking || !this.isPlaying) && Math.abs(element.currentTime - expected) > tolerance) element.currentTime = expected;
     element.playbackRate = this.rate;
-    const silent = track.kind === 'camera' || track.muted || clip.muted;
+    const silent = this.allMuted || track.kind === 'camera' || track.muted || clip.muted;
     element.muted = Boolean(silent);
     element.volume = Math.min(1, Math.max(0, clip.volume ?? 1));
     return element;
@@ -313,9 +318,19 @@ export class TimelinePlayer {
   private frameImageFor(track: TimelineTrack, clip: MediaClip): FrameImage | null {
     const asset = this.content!.assets.get(clip.assetId);
     if (!asset) return null;
-    if (asset.kind === 'image') {
-      const image = this.images.get(clip.assetId);
-      return image?.complete && image.naturalWidth > 0 ? { image, width: image.naturalWidth, height: image.naturalHeight } : null;
+    if (isStill(asset)) {
+      const content = contentRect({ width: this.canvas.width, height: this.canvas.height }, this.content!.source);
+      const bitmap = this.stills.peek(
+        {
+          assetId: clip.assetId,
+          kind: asset.kind === 'pdf' ? 'pdf' : 'image',
+          page: clip.page,
+          size: asset.width && asset.height ? { width: asset.width, height: asset.height } : undefined,
+          load: () => fetch(asset.url).then((response) => response.blob()),
+        },
+        content,
+      );
+      return bitmap ? { image: bitmap, width: bitmap.width, height: bitmap.height } : null;
     }
     const slot = this.slots.get(track.id);
     const element = slot?.element;

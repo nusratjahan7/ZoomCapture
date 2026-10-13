@@ -19,10 +19,12 @@ export type MediaAssetKind =
   | 'microphone'
   | 'system-audio'
   | 'thumbnail'
-  /** Imported by the user into a project (future modules). */
+  /** Imported by the user into a project. */
   | 'image'
   | 'audio'
-  | 'video';
+  | 'video'
+  /** A PDF document; each page can be placed on the timeline (Module 07). */
+  | 'pdf';
 
 /** `recording`: original captured media. `generated`: derived (thumbnail). `import`: added to a project. */
 export type MediaAssetOrigin = 'recording' | 'generated' | 'import';
@@ -48,6 +50,15 @@ export interface MediaAsset {
   hasAudio?: boolean;
   /** The source stopped before the recording did (device unplugged, tab closed…). */
   endedEarly?: boolean;
+  /** PDF documents: number of pages. */
+  pageCount?: number;
+  /**
+   * Imports: size, modification time and a hash of the first and last megabyte, so importing the
+   * same file twice reuses the stored copy instead of storing it again.
+   */
+  fingerprint?: string;
+  /** Imports recorded in the editor (voiceover narration). */
+  voiceover?: boolean;
   createdAt: number;
 }
 
@@ -104,6 +115,8 @@ export interface MediaClip {
   muted?: boolean;
   /** 0-1. */
   volume?: number;
+  /** PDF assets: the page shown (1-based). Like an image, a page can be shown for any length. */
+  page?: number;
 }
 
 export type TextSize = 'small' | 'medium' | 'large';

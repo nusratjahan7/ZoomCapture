@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { findClip } from '@/services/timeline/model';
 import {
   addMediaClip,
+  addPdfPages,
   addTextClip,
   deleteItems,
   duplicateClip,
@@ -10,7 +11,8 @@ import {
   TimelineEditError,
   trimClip,
 } from '@/services/timeline/operations';
-import { createMarker, duplicateMarker, updateMarker } from '@/services/zoom/markers';
+import { clipForNewMarker, updateMarkerOnTimeline } from '@/services/timeline/attachment';
+import { createMarker, duplicateMarker } from '@/services/zoom/markers';
 import type { MediaAsset, Project } from '@/types';
 import { useEditor } from '../state/EditorContext';
 
@@ -66,7 +68,10 @@ export function useTimelineActions() {
           if (project.timeline.zoomMarkers.some((marker) => marker.id === id)) {
             const result = duplicateMarker(project.timeline.zoomMarkers, id, project.timeline.durationMs);
             copyId = result.copy.id;
-            return withTimeline(project, { ...project.timeline, zoomMarkers: result.markers });
+            // The copy belongs to the clip on screen where it lands.
+            const clipId = clipForNewMarker(project.timeline, result.copy.timeMs);
+            const zoomMarkers = result.markers.map((marker) => (marker.id === copyId ? { ...marker, clipId: clipId ?? marker.clipId } : marker));
+            return withTimeline(project, { ...project.timeline, zoomMarkers });
           }
           const result = duplicateClip(project.timeline, id);
           copyId = result.copyId;
@@ -86,7 +91,7 @@ export function useTimelineActions() {
             for (const id of ids) {
               const marker = timeline.zoomMarkers.find((candidate) => candidate.id === id);
               if (marker) {
-                timeline = { ...timeline, zoomMarkers: updateMarker(timeline.zoomMarkers, id, { timeMs: marker.timeMs + deltaMs }, timeline.durationMs) };
+                timeline = updateMarkerOnTimeline(timeline, id, { timeMs: marker.timeMs + deltaMs });
                 continue;
               }
               const found = findClip(timeline, id);
@@ -109,14 +114,28 @@ export function useTimelineActions() {
         return clipId;
       },
 
-      addMedia(asset: MediaAsset, atMs = playheadMs()) {
+      /** Places a file at `atMs` (default: the playhead), on `trackId` if it fits there. Returns the clip id. */
+      addMedia(asset: MediaAsset, atMs = playheadMs(), trackId?: string, options?: { page?: number; durationMs?: number }) {
         let clipId = '';
         store.edit(`Add ${asset.label ?? asset.kind}`, (project) => {
-          const result = addMediaClip(project.timeline, asset, atMs);
+          const result = addMediaClip(project.timeline, asset, atMs, trackId, options);
           clipId = result.clipId;
           return withTimeline(project, result.timeline);
         });
         if (clipId) store.select([clipId]);
+        return clipId;
+      },
+
+      /** Places PDF pages one after another from `atMs`, each shown for `pageMs`. */
+      addPdfPages(asset: MediaAsset, pages: readonly number[], pageMs: number, atMs = playheadMs(), trackId?: string) {
+        let clipIds: string[] = [];
+        store.edit(pages.length === 1 ? `Add page ${pages[0]}` : `Add ${pages.length} pages`, (project) => {
+          const result = addPdfPages(project.timeline, asset, pages, atMs, pageMs, trackId);
+          clipIds = result.clipIds;
+          return withTimeline(project, result.timeline);
+        });
+        if (clipIds.length) store.select(clipIds);
+        return clipIds;
       },
 
       addZoomEffect() {
@@ -124,7 +143,9 @@ export function useTimelineActions() {
         store.edit('Add zoom effect', (project) => {
           const durationMs = project.timeline.durationMs;
           if (durationMs <= 0) throw new TimelineEditError('Add a video clip first, then a zoom effect.');
-          const marker = createMarker({ timeMs: Math.min(playheadMs(), durationMs) }, project.zoom, durationMs);
+          const timeMs = Math.min(playheadMs(), durationMs);
+          // It zooms into the clip on screen at the playhead.
+          const marker = { ...createMarker({ timeMs }, project.zoom, durationMs), clipId: clipForNewMarker(project.timeline, timeMs) };
           id = marker.id;
           return withTimeline(project, { ...project.timeline, zoomMarkers: [...project.timeline.zoomMarkers, marker].sort((a, b) => a.timeMs - b.timeMs) });
         });

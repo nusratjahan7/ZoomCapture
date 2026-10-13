@@ -12,6 +12,10 @@ export interface EditorContextValue {
   recording: Recording;
   assets: readonly MediaAsset[];
   assetLookup: AssetLookup;
+  /** Adds newly imported files to the editor (already stored with the project). */
+  addAssets: (assets: MediaAsset[]) => void;
+  /** Drops a file removed from the project. */
+  forgetAsset: (assetId: string) => void;
   /** Shows an editing error to the user. */
   reportError: (message: string) => void;
   /** Current playhead time (read on demand; never causes a re-render). */

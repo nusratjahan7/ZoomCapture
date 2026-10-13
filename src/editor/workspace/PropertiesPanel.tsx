@@ -1,10 +1,11 @@
+import { updateMarkerOnTimeline } from '@/services/timeline/attachment';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Copy, Focus, MousePointer2, MousePointerClick, Scissors, Sparkles, Trash2, ZoomIn } from 'lucide-react';
 import { renderEffectsOf } from '@/services/render/frameState';
 import { describeMimeType } from '@/services/recording/mimeTypes';
 import { clipDuration, findClip, isMediaClip } from '@/services/timeline/model';
 import { setClipTiming, updateMediaClip, updateTextClip } from '@/services/timeline/operations';
-import { updateMarker, type MarkerPatch } from '@/services/zoom/markers';
+import type { MarkerPatch } from '@/services/zoom/markers';
 import { Button, SegmentedControl, Toggle } from '@/shared/components';
 import {
   TRANSITION_MS,
@@ -207,7 +208,7 @@ function MarkerProperties({ marker }: { marker: ZoomMarker }) {
   const change = (label: string, patch: MarkerPatch, mergeKey?: string) =>
     store.edit(
       label,
-      (p) => ({ ...p, timeline: { ...p.timeline, zoomMarkers: updateMarker(p.timeline.zoomMarkers, marker.id, patch, p.timeline.durationMs) } }),
+      (p) => ({ ...p, timeline: updateMarkerOnTimeline(p.timeline, marker.id, patch) }),
       { mergeKey },
     );
   const speed = speedOf(marker.transitionMs);

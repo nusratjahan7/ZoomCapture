@@ -18,6 +18,7 @@ import { PreviewPane, type PreviewOptions } from './PreviewPane';
 import { SidePanel, SideRail, type SideTab } from './SidePanel';
 import { timelineContentHeight, TimelinePanel } from './TimelinePanel';
 import { useAssetUrls } from './useAssetUrls';
+import { hasFiles, useImportFiles } from './useImportFiles';
 import { SHORTCUTS, useEditorShortcuts } from './useEditorShortcuts';
 import { useTimelineActions } from './useTimelineActions';
 
@@ -97,9 +98,14 @@ export function EditorWorkspace({ details }: { details: RecordingDetails }) {
   playerRef.current = player;
   const playheadMs = useCallback(() => playerRef.current?.time ?? 0, []);
 
+  const addAssets = useCallback(
+    (added: MediaAsset[]) => setAssets((current) => [...current, ...added.filter((asset) => !current.some((existing) => existing.id === asset.id))]),
+    [],
+  );
+  const forgetAsset = useCallback((assetId: string) => setAssets((current) => current.filter((asset) => asset.id !== assetId)), []);
   const context = useMemo<EditorContextValue>(
-    () => ({ store, player, setPlayer, recording, assets, assetLookup, reportError, playheadMs, snapping, setSnapping, timelineZoom }),
-    [store, player, recording, assets, assetLookup, reportError, playheadMs, snapping],
+    () => ({ store, player, setPlayer, recording, assets, assetLookup, addAssets, forgetAsset, reportError, playheadMs, snapping, setSnapping, timelineZoom }),
+    [store, player, recording, assets, assetLookup, addAssets, forgetAsset, reportError, playheadMs, snapping],
   );
 
   // Never lose edits: save on leaving, and ask first while a save is pending or failed.
@@ -153,7 +159,7 @@ export function EditorWorkspace({ details }: { details: RecordingDetails }) {
             </Button>
           </div>
         )}
-        <EditorLayout urls={urls} onAssetsChanged={setAssets} />
+        <EditorLayout urls={urls} />
       </div>
     </EditorContext.Provider>
   );
@@ -163,7 +169,7 @@ export function EditorWorkspace({ details }: { details: RecordingDetails }) {
  * Rail + side panel + preview on top, the control bar, then the resizable timeline. On narrow
  * windows the side panel floats over the preview instead of taking width from it.
  */
-function EditorLayout({ urls, onAssetsChanged }: { urls: ReturnType<typeof useAssetUrls>; onAssetsChanged: (assets: MediaAsset[]) => void }) {
+function EditorLayout({ urls }: { urls: ReturnType<typeof useAssetUrls> }) {
   const wide = useMediaQuery(WIDE_QUERY);
   const [side, setSide] = useState<{ tab: SideTab; open: boolean }>(() => ({ tab: 'media', open: window.matchMedia(WIDE_QUERY).matches }));
   const sideRef = useRef(side);
@@ -230,15 +236,48 @@ function EditorLayout({ urls, onAssetsChanged }: { urls: ReturnType<typeof useAs
   };
   const resizing = useRef<{ y: number; height: number } | null>(null);
 
+  // Files dropped anywhere in the editor are imported (on the timeline they are also placed).
+  const { importFiles } = useImportFiles();
+  const [droppingFiles, setDroppingFiles] = useState(false);
+  const dragDepth = useRef(0);
+
   return (
-    <main className="flex min-h-0 flex-1 flex-col">
+    <main
+      className="relative flex min-h-0 flex-1 flex-col"
+      onDragEnter={(event) => {
+        if (!hasFiles(event)) return;
+        dragDepth.current += 1;
+        setDroppingFiles(true);
+      }}
+      onDragOver={(event) => {
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(event) => {
+        if (!hasFiles(event)) return;
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDroppingFiles(false);
+      }}
+      onDrop={(event) => {
+        dragDepth.current = 0;
+        setDroppingFiles(false);
+        if (!hasFiles(event) || event.defaultPrevented) return;
+        event.preventDefault();
+        void importFiles([...event.dataTransfer.files]);
+      }}
+    >
+      {droppingFiles && (
+        <div aria-hidden className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-accent bg-canvas/80 text-sm font-medium text-fg">
+          Drop to import · drop on the timeline to place the files there
+        </div>
+      )}
       <div className="relative flex min-h-0 flex-1">
         <SideRail tab={side.tab} open={side.open} onPick={pick} />
         {side.open && (
           <SidePanel
             tab={side.tab}
             onClose={() => setSide((current) => ({ ...current, open: false }))}
-            onAssetsChanged={onAssetsChanged}
             keepTab={keepTab}
             className={
               wide

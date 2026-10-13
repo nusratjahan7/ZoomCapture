@@ -1,4 +1,5 @@
 import { markerSpan } from '@/services/zoom/markers';
+import { markerClipId } from './attachment';
 import type { MediaAsset, MediaClip, NormalizedPoint, TextClip, TextStyle, Timeline, TimelineClip, TimelineTrack, TrackKind } from '@/types';
 import { createId } from '@/utils/id';
 import {
@@ -109,12 +110,11 @@ export function moveClip(timeline: Timeline, clipId: string, target: MoveTarget,
     tracks = replaceTrack(tracks, destination.id, { ...destination, clips: sortClips([...destination.clips, moved]) });
   }
 
-  let markers = timeline.zoomMarkers;
-  if (track.kind === 'video' && clip.type === 'media') {
-    const delta = startMs - clip.startMs;
-    const end = clipEnd(clip);
-    markers = markers.map((marker) => (marker.timeMs >= clip.startMs && marker.timeMs < end ? { ...marker, timeMs: marker.timeMs + delta } : marker));
-  }
+  // Zoom effects belong to a clip (see attachment.ts): they move with it.
+  const delta = startMs - clip.startMs;
+  const markers = timeline.zoomMarkers.map((marker) =>
+    markerClipId(timeline, marker) === clip.id ? { ...marker, clipId: clip.id, timeMs: marker.timeMs + delta } : marker,
+  );
   return finish(timeline, tracks, markers);
 }
 
@@ -177,7 +177,11 @@ export function splitClip(timeline: Timeline, clipId: string, atMs: number): { t
     right = { ...clip, id: rightId, startMs: at, durationMs: clipEnd(clip) - at };
   }
   const clips = track.clips.flatMap((c) => (c.id === clip.id ? [left, right] : [c]));
-  return { timeline: finish(timeline, replaceTrack(timeline.tracks, track.id, { ...track, clips })), rightId };
+  // Zoom effects of the clip after the cut now belong to the right-hand part.
+  const markers = timeline.zoomMarkers.map((marker) =>
+    markerClipId(timeline, marker) === clip.id ? { ...marker, clipId: marker.timeMs >= at ? rightId : clip.id } : marker,
+  );
+  return { timeline: finish(timeline, replaceTrack(timeline.tracks, track.id, { ...track, clips }), markers), rightId };
 }
 
 /**
@@ -209,8 +213,13 @@ export function deleteItems(timeline: Timeline, ids: readonly string[]): Timelin
   const tracks = timeline.tracks.map((track) =>
     track.clips.some((clip) => remove.has(clip.id)) ? { ...track, clips: track.clips.filter((clip) => !remove.has(clip.id)) } : track,
   );
-  const markers = timeline.zoomMarkers.some((marker) => remove.has(marker.id)) ? timeline.zoomMarkers.filter((m) => !remove.has(m.id)) : timeline.zoomMarkers;
-  return finish(timeline, tracks, markers);
+  // Zoom effects are deleted with the clip they belong to.
+  const markers = timeline.zoomMarkers.filter((marker) => {
+    if (remove.has(marker.id)) return false;
+    const owner = markerClipId(timeline, marker);
+    return owner === null || !remove.has(owner);
+  });
+  return finish(timeline, tracks, markers.length === timeline.zoomMarkers.length ? timeline.zoomMarkers : markers);
 }
 
 /** Copies a clip into the nearest free spot after it on the same track. */
@@ -219,7 +228,17 @@ export function duplicateClip(timeline: Timeline, clipId: string): { timeline: T
   const startMs = nearestFreeStart(track.clips, clipEnd(clip), clipDuration(clip));
   if (startMs === null) throw new TimelineEditError('There is no room on this track for a copy.');
   const copy = { ...clip, id: createId('clp'), startMs };
-  return { timeline: finish(timeline, replaceTrack(timeline.tracks, track.id, { ...track, clips: sortClips([...track.clips, copy]) })), copyId: copy.id };
+  // The copy gets copies of the clip's zoom effects.
+  const delta = startMs - clip.startMs;
+  const now = Date.now();
+  const copiedMarkers = timeline.zoomMarkers
+    .filter((marker) => markerClipId(timeline, marker) === clip.id)
+    .map((marker) => ({ ...marker, id: createId('zm'), clipId: copy.id, timeMs: marker.timeMs + delta, origin: 'manual' as const, sourceEventIds: undefined, createdAt: now, updatedAt: now }));
+  const markers = copiedMarkers.length ? [...timeline.zoomMarkers, ...copiedMarkers].sort((a, b) => a.timeMs - b.timeMs) : timeline.zoomMarkers;
+  return {
+    timeline: finish(timeline, replaceTrack(timeline.tracks, track.id, { ...track, clips: sortClips([...track.clips, copy]) }), markers),
+    copyId: copy.id,
+  };
 }
 
 export function addTrack(timeline: Timeline, kind: TrackKind, index?: number): { timeline: Timeline; trackId: string } {
@@ -270,19 +289,55 @@ function trackWithRoom(timeline: Timeline, kinds: TrackKind[], startMs: number, 
 /** Places a whole asset at `atMs`, on a free compatible track (a new one if needed). */
 export function addMediaClip(
   timeline: Timeline,
-  asset: Pick<MediaAsset, 'id' | 'kind' | 'durationMs'>,
+  asset: Pick<MediaAsset, 'id' | 'kind' | 'durationMs' | 'pageCount'>,
   atMs: number,
   trackId?: string,
+  options: { page?: number; durationMs?: number } = {},
 ): { timeline: Timeline; clipId: string } {
   const kinds = trackKindsFor(asset);
   if (kinds.length === 0) throw new TimelineEditError('This file type can’t be placed on the timeline.');
-  const duration = hasFixedLength(asset) ? (asset.durationMs ?? 0) : DEFAULT_STILL_MS;
+  const duration = hasFixedLength(asset) ? (asset.durationMs ?? 0) : Math.max(MIN_CLIP_MS, round(options.durationMs ?? DEFAULT_STILL_MS));
   if (duration < MIN_CLIP_MS) throw new TimelineEditError('This media is too short or its length is unknown.');
+  const page = asset.kind === 'pdf' ? (options.page ?? 1) : undefined;
+  if (page !== undefined && (page < 1 || page > (asset.pageCount ?? 1))) throw new TimelineEditError(`This PDF has no page ${page}.`);
   const startMs = Math.max(0, round(atMs));
   const placed = trackWithRoom(timeline, kinds, startMs, duration, trackId);
-  const clip: MediaClip = { id: createId('clp'), type: 'media', assetId: asset.id, startMs, sourceInMs: 0, sourceOutMs: round(duration) };
+  const clip: MediaClip = { id: createId('clp'), type: 'media', assetId: asset.id, startMs, sourceInMs: 0, sourceOutMs: round(duration), ...(page ? { page } : {}) };
   const tracks = replaceTrack(placed.timeline.tracks, placed.track.id, { ...placed.track, clips: sortClips([...placed.track.clips, clip]) });
   return { timeline: finish(placed.timeline, tracks), clipId: clip.id };
+}
+
+/**
+ * Places PDF pages one after another from `atMs`, each shown for `pageMs`, on one video track with
+ * room for all of them (a new track if needed). Pages are 1-based, in the order given.
+ */
+export function addPdfPages(
+  timeline: Timeline,
+  asset: Pick<MediaAsset, 'id' | 'kind' | 'pageCount'>,
+  pages: readonly number[],
+  atMs: number,
+  pageMs = DEFAULT_STILL_MS,
+  trackId?: string,
+): { timeline: Timeline; clipIds: string[] } {
+  if (asset.kind !== 'pdf') throw new TimelineEditError('Only PDF pages can be added this way.');
+  if (pages.length === 0) throw new TimelineEditError('Select at least one page.');
+  const each = Math.max(MIN_CLIP_MS, round(pageMs));
+  for (const page of pages) {
+    if (!Number.isInteger(page) || page < 1 || page > (asset.pageCount ?? 0)) throw new TimelineEditError(`This PDF has no page ${page}.`);
+  }
+  const startMs = Math.max(0, round(atMs));
+  const placed = trackWithRoom(timeline, ['video'], startMs, each * pages.length, trackId);
+  const clips: MediaClip[] = pages.map((page, index) => ({
+    id: createId('clp'),
+    type: 'media',
+    assetId: asset.id,
+    startMs: startMs + index * each,
+    sourceInMs: 0,
+    sourceOutMs: each,
+    page,
+  }));
+  const tracks = replaceTrack(placed.timeline.tracks, placed.track.id, { ...placed.track, clips: sortClips([...placed.track.clips, ...clips]) });
+  return { timeline: finish(placed.timeline, tracks), clipIds: clips.map((clip) => clip.id) };
 }
 
 export const DEFAULT_TEXT_STYLE: TextStyle = { size: 'medium', color: '#ffffff', background: true };

@@ -1,3 +1,4 @@
+import { activeMarkers } from '@/services/timeline/attachment';
 import { clipAt } from '@/services/timeline/model';
 import { clipsOfAsset, mapClicksToTimeline, mapCursorToTimeline } from '@/services/timeline/mapping';
 import type { Size } from '@/services/zoom/coordinates';
@@ -52,7 +53,8 @@ export function activeVisuals(timeline: Timeline, timeMs: number): ActiveVisuals
 export function timelineScene(project: Pick<Project, 'timeline' | 'renderEffects'>, recording: Pick<Recording, 'screenAssetId' | 'interactions' | 'cursor'>): Omit<RenderScene, 'zoom'> {
   const clips = clipsOfAsset(project.timeline, recording.screenAssetId);
   return {
-    markers: project.timeline.zoomMarkers,
+    // Only effects whose clip is on screen at their time (see timeline/attachment.ts).
+    markers: activeMarkers(project.timeline),
     clicks: mapClicksToTimeline(clips, recording.interactions),
     cursor: mapCursorToTimeline(clips, recording.cursor ?? []),
     effects: renderEffectsOf(project),

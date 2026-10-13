@@ -203,7 +203,7 @@ describe('imported media', () => {
   it('stores imported files with the project and removes them only when unused', async () => {
     const { project } = await savedProject();
     const file = Object.assign(new Blob(['ID3 song'], { type: 'audio/mpeg' }), { name: 'Theme.mp3' });
-    const asset = await importProjectAsset(project.id, file, { durationMs: 4000, hasAudio: true });
+    const { asset } = await importProjectAsset(project.id, file, { kind: 'audio', mimeType: 'audio/mpeg', info: { durationMs: 4000, hasAudio: true } });
     expect(asset).toMatchObject({ kind: 'audio', origin: 'import', projectId: project.id, label: 'Theme.mp3', durationMs: 4000 });
     expect((await getProject(project.id))!.importedAssetIds).toEqual([asset.id]);
     expect((await getRecordingDetails(project.recordingId))!.assets.map((a) => a.id)).toContain(asset.id);
@@ -226,6 +226,8 @@ describe('imported media', () => {
   it('never removes the recording’s own media and refuses unsupported files', async () => {
     const { project, recording } = await savedProject();
     await expect(removeImportedAsset(project.id, recording.screenAssetId)).rejects.toThrow(/Only imported files/);
-    await expect(importProjectAsset(project.id, new Blob(['x'], { type: 'application/pdf' }), {})).rejects.toThrow(/Only video, audio and image/);
+    await expect(
+      importProjectAsset(project.id, new Blob(['x'], { type: 'text/plain' }), { kind: 'text' as never, mimeType: 'text/plain', info: {} }),
+    ).rejects.toThrow(/Only video, audio, image and PDF/);
   });
 });
