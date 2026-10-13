@@ -138,6 +138,8 @@ export function RecordingPage() {
     };
   }, [trackingStatus, tracking.scope, display.target]);
 
+  // Set further down, once the floating window and the helper are known.
+  const beforeStartRef = useRef<() => Promise<void> | void>(() => undefined);
   const flow = useRecordingFlow(
     {
       sessionId,
@@ -157,6 +159,7 @@ export function RecordingPage() {
         pip.close();
       },
       onSaved: () => toast.show({ variant: 'success', title: 'Recording saved', description: 'It is stored on this device.' }),
+      beforeStart: () => beforeStartRef.current(),
     },
   );
   phaseRef.current = flow.phase;
@@ -228,8 +231,10 @@ export function RecordingPage() {
 
   const startRecording = () => {
     // Picture-in-Picture needs the click's user activation, so it opens here, before the countdown.
-    // Without a countdown it would close again at once when hidden while recording: not opened then.
-    const hiddenAtOnce = capturesWholeScreen && settings?.hideFloatingWhileRecording && settings.countdownSeconds === 0;
+    // Entire screen: not opened when the Windows helper shows the controls (countdown included),
+    // nor without a countdown when it would close again at once.
+    const hiddenAtOnce =
+      capturesWholeScreen && (settings?.nativeControls || (settings?.hideFloatingWhileRecording && settings.countdownSeconds === 0));
     if (settings?.floatingControls && pip.supported && !hiddenAtOnce) openFloatingControls();
     flow.start();
     void availableSpace().then((free) => {
@@ -246,15 +251,19 @@ export function RecordingPage() {
   // Windows helper (Settings → On screen, but not in the video): during entire-screen recordings
   // the controls move to its window, which Windows leaves out of screen captures.
   const native = useNativeControls({
-    active: Boolean(settings?.nativeControls) && capturesWholeScreen && recording,
+    // From the countdown on, so the helper shows it too (its window is never in the video).
+    active: Boolean(settings?.nativeControls) && capturesWholeScreen && (recording || flow.phase === 'countdown' || flow.phase === 'starting'),
     state: {
-      phase: flow.phase === 'paused' ? 'paused' : 'recording',
+      phase: flow.phase === 'paused' ? 'paused' : flow.phase === 'countdown' ? 'countdown' : 'recording',
+      countdown: flow.countdown,
       elapsedMs: flow.elapsedMs,
       micAvailable: recording && flow.recordedKinds.includes('microphone'),
       micMuted: flow.micMuted,
     },
+    camera: flow.cameraHidden ? null : camera.stream,
     onCommand: (command) => {
-      if (command === 'pause') flow.pause();
+      if (command === 'cancel') cancelCountdown();
+      else if (command === 'pause') flow.pause();
       else if (command === 'resume') flow.resume();
       else if (command === 'stop') void flow.stop();
       else flow.toggleMicMuted();
@@ -276,24 +285,21 @@ export function RecordingPage() {
 
   // Tab and window captures never include the floating window, so it stays open for them. An
   // entire-screen capture records everything on screen, and no browser API can leave one window
-  // out: there it shows the countdown, then closes as recording starts (Settings → Hide it while
-  // recording your entire screen), or once the Windows helper's controls are on screen. Once per
-  // session.
-  const hidFloating = useRef(false);
+  // out: there it shows the countdown and closes just before the recorders start, so it is in no
+  // frame (Settings → Hide it while recording the entire screen; always when the Windows helper
+  // shows the controls instead).
   const { pipWindow, close: closePip } = pip;
-  useEffect(() => {
-    if (flow.phase !== 'recording' || !pipWindow || !capturesWholeScreen || hidFloating.current) return;
-    const nativeShown = nativeState === 'shown';
-    if (!nativeShown && !settings?.hideFloatingWhileRecording) return;
-    hidFloating.current = true;
+  beforeStartRef.current = async () => {
+    if (!pipWindow || !capturesWholeScreen || !(settings?.hideFloatingWhileRecording || settings?.nativeControls)) return;
     closePip();
-    // The helper's own message says where the controls went.
-    if (nativeShown || settings?.nativeControls) return;
+    // Give the compositor a moment to take the window off the screen before the first frame.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    if (settings.nativeControls) return; // The helper's own message says where the controls are.
     toast.show({
       title: 'Floating controls hidden',
       description: 'A recording of the entire screen would capture them. Pause or stop from the ZoomCapture toolbar icon or this tab.',
     });
-  }, [flow.phase, pipWindow, closePip, capturesWholeScreen, nativeState, settings?.hideFloatingWhileRecording, settings?.nativeControls, toast]);
+  };
 
   // Ask the browser to keep recordings even under storage pressure (granted silently for extensions).
   useEffect(() => {
@@ -550,6 +556,7 @@ export function RecordingPage() {
             icon={Settings}
             label="Open settings"
             tooltipSide="bottom"
+            tooltipAlign="end"
             onClick={() => void sendMessage('page/open', { page: 'settings' })}
           />
           {session && !active && (

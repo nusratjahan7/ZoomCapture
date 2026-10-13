@@ -39,7 +39,7 @@ export async function runExtensionTest(test, { powershell, probe }) {
       await env.worker.evaluate(async () => {
         const { settings } = await chrome.storage.local.get('settings');
         await chrome.storage.local.set({
-          settings: { ...settings, defaultSource: 'screen', cameraEnabled: false, microphoneEnabled: true, countdownSeconds: 0, floatingControls: false, nativeControls: true },
+          settings: { ...settings, defaultSource: 'screen', cameraEnabled: false, microphoneEnabled: true, countdownSeconds: 3, floatingControls: true, nativeControls: true },
         });
       });
       const settingsPage = await env.open('settings/index.html');
@@ -52,16 +52,49 @@ export async function runExtensionTest(test, { powershell, probe }) {
       await (await button(popup, 'Start Recording')).click();
       const studio = await (await studioTarget).page();
       await studio.bringToFront();
+      // A steady drawn camera (Chrome's fake camera stops at random in automation).
+      await studio.evaluate(() => {
+        const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+        navigator.mediaDevices.getUserMedia = async (constraints) => {
+          if (!constraints?.video) return original(constraints);
+          const canvas = Object.assign(document.createElement('canvas'), { width: 640, height: 480 });
+          const ctx = canvas.getContext('2d');
+          let hue = 0;
+          setInterval(() => {
+            ctx.fillStyle = `hsl(${(hue += 5) % 360} 60% 50%)`;
+            ctx.fillRect(0, 0, 640, 480);
+          }, 33);
+          return canvas.captureStream(30);
+        };
+      });
       await (await button(studio, 'Choose screen')).click();
       await studio.waitForSelector('video[aria-label="Live preview of the shared surface"]');
+      await (await studio.waitForSelector('xpath/.//*[@role="switch"][contains(., "Camera")]')).click();
+      await studio.waitForSelector('[data-testid=camera-bubble]');
+      // Watch for Chrome's floating window: with the helper it never opens (it would be in the video).
+      await studio.evaluate(() => {
+        window.__floatingOpened = false;
+        documentPictureInPicture.addEventListener('enter', () => (window.__floatingOpened = true));
+      });
       await (await button(studio, 'Start recording')).click();
-      await studio.waitForSelector('[role=timer]');
+      // The helper shows the countdown (its window isn't in the video either).
       await waitForText(studio, 'Controls are on screen, not in the video');
+      await waitForText(studio, 'Recording starts in');
+      const countingPid = Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-Process ZoomCaptureControls | Select-Object -First 1).Id'], { encoding: 'utf8' }).trim());
+      assert.ok(countingPid > 0, 'helper shown during the countdown');
+      await studio.waitForSelector('[role=timer]', { timeout: 10_000 });
+      assert.equal(await studio.evaluate(() => window.__floatingOpened), false, 'Chrome floating window never opened');
 
       const pid = Number(execFileSync('powershell', ['-NoProfile', '-Command', '(Get-Process ZoomCaptureControls | Select-Object -First 1).Id'], { encoding: 'utf8' }).trim());
       assert.ok(pid > 0, 'helper running');
-      // Left out of a screen capture (a white window underneath shows through).
-      const capture = probe(['-Action', 'Capture', '-ProcessId', pid]);
+      // The camera preview appears above the controls (the window grows to fit the circle), and
+      // the whole window is left out of a screen capture (a white window underneath shows through).
+      let capture = probe(['-Action', 'Capture', '-ProcessId', pid]);
+      for (let i = 0; i < 20 && capture.rect.height < 150; i++) {
+        await sleep(250);
+        capture = probe(['-Action', 'Capture', '-ProcessId', pid]);
+      }
+      assert.ok(capture.rect.height > 150, `camera preview shown: ${JSON.stringify(capture.rect)}`);
       assert.ok(capture.white > 0.9, `not in the screen capture: ${JSON.stringify(capture)}`);
 
       // Its buttons control the recording.
@@ -79,11 +112,14 @@ export async function runExtensionTest(test, { powershell, probe }) {
       for (let i = 0; i < 20 && execFileSync('tasklist', { encoding: 'utf8' }).includes('ZoomCaptureControls'); i++) await sleep(250);
       assert.ok(!execFileSync('tasklist', { encoding: 'utf8' }).includes('ZoomCaptureControls'), 'helper closed');
     } finally {
-      await env.browser.close();
+      // The registry first, whatever else fails: it must end as it was before the test.
       for (const [key, value] of saved) {
         if (value) reg(['add', key, '/ve', '/d', value, '/f']);
         else reg(['delete', key, '/f']);
       }
+      const restored = KEYS.every((key, index) => registration(key) === saved[index][1]);
+      if (!restored) console.error(`    ! Could not restore the helper registration: ${JSON.stringify(saved)}`);
+      await env.browser.close().catch(() => undefined);
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
       rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }

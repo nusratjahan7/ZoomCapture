@@ -8,10 +8,12 @@ export const NATIVE_HOST = 'com.zoomcapture.controls';
 const PERMISSION = { permissions: ['nativeMessaging'] } as chrome.permissions.Permissions;
 const CONNECT_TIMEOUT_MS = 4000;
 
-export type NativeCommand = 'pause' | 'resume' | 'stop' | 'toggleMic';
+export type NativeCommand = 'pause' | 'resume' | 'stop' | 'toggleMic' | 'cancel';
 
 export interface NativeControlsState {
-  phase: 'recording' | 'paused';
+  phase: 'countdown' | 'recording' | 'paused';
+  /** Seconds left while counting down. */
+  countdown?: number;
   elapsedMs: number;
   micAvailable: boolean;
   micMuted: boolean;
@@ -112,6 +114,11 @@ export class NativeControls {
     this.post({ type: 'hide' });
   }
 
+  /** A camera preview frame (JPEG, base64) for the circle above the controls; null hides it. */
+  sendCamera(jpegBase64: string | null): void {
+    this.post({ type: 'camera', frame: jpegBase64 });
+  }
+
   /** Closes the connection; the helper quits. */
   close(): void {
     if (this.closed) return;
@@ -138,5 +145,64 @@ export async function checkNativeHelper(): Promise<NativeHelperStatus> {
     return { state: 'ready', version: controls.version, excluded: controls.excluded };
   } catch (error) {
     return { state: 'unavailable', reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Side of the square camera frames sent to the helper (pixels; drawn about half that size). */
+export const CAMERA_FRAME_SIZE = 320;
+const CAMERA_FPS = 15;
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+/**
+ * Sends the camera to the helper as small JPEG frames (centre-cropped square, mirrored like a
+ * mirror), about 15 a second, until `signal` aborts. Frames are read from the track itself
+ * (MediaStreamTrackProcessor), so this keeps going while the studio tab is in the background,
+ * where timers are slowed down. Uses a copy of the track, so the recording is not affected.
+ */
+export async function streamCameraFrames(track: MediaStreamTrack, send: (jpegBase64: string) => void, signal: AbortSignal): Promise<void> {
+  if (typeof MediaStreamTrackProcessor !== 'function') return;
+  const copy = track.clone();
+  const reader = new MediaStreamTrackProcessor({ track: copy, maxBufferSize: 1 }).readable.getReader();
+  const canvas = new OffscreenCanvas(CAMERA_FRAME_SIZE, CAMERA_FRAME_SIZE);
+  const ctx = canvas.getContext('2d');
+  const stop = () => void reader.cancel().catch(() => undefined);
+  signal.addEventListener('abort', stop, { once: true });
+  let last = Number.NEGATIVE_INFINITY;
+  let encoding = false;
+  try {
+    while (!signal.aborted && ctx) {
+      const { value: frame, done } = await reader.read();
+      if (done || !frame) break;
+      try {
+        const now = performance.now();
+        // Skip frames while the previous one is still being encoded, or too soon after it.
+        if (encoding || now - last < 1000 / CAMERA_FPS) continue;
+        last = now;
+        const side = Math.min(frame.displayWidth, frame.displayHeight);
+        ctx.save();
+        ctx.translate(CAMERA_FRAME_SIZE, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(frame, (frame.displayWidth - side) / 2, (frame.displayHeight - side) / 2, side, side, 0, 0, CAMERA_FRAME_SIZE, CAMERA_FRAME_SIZE);
+        ctx.restore();
+      } finally {
+        frame.close();
+      }
+      encoding = true;
+      void canvas
+        .convertToBlob({ type: 'image/jpeg', quality: 0.75 })
+        .then(async (blob) => {
+          if (!signal.aborted) send(toBase64(new Uint8Array(await blob.arrayBuffer())));
+        })
+        .catch(() => undefined)
+        .finally(() => (encoding = false));
+    }
+  } finally {
+    signal.removeEventListener('abort', stop);
+    copy.stop();
   }
 }

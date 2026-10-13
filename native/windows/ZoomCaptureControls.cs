@@ -6,10 +6,11 @@
 // when the connection closes. Messages are JSON, each preceded by its length (4 bytes, little
 // endian), on stdin (from the extension) and stdout (to the extension).
 //
-//   extension → helper: { type: "show" | "state", phase: "recording" | "paused", elapsedMs,
-//                         micAvailable, micMuted }, { type: "hide" }, { type: "ping" }
+//   extension → helper: { type: "show" | "state", phase: "countdown" | "recording" | "paused",
+//                         countdown, elapsedMs, micAvailable, micMuted }, { type: "hide" },
+//                         { type: "camera", frame: <JPEG, base64> | null }, { type: "ping" }
 //   helper → extension: { type: "ready", version, excluded }, { type: "pong", version, excluded },
-//                       { type: "command", action: "pause" | "resume" | "stop" | "toggleMic" }
+//                       { type: "command", action: "pause" | "resume" | "stop" | "toggleMic" | "cancel" }
 //
 // Built with the C# compiler that ships with Windows (.NET Framework 4); see install.ps1.
 using System;
@@ -28,7 +29,7 @@ namespace ZoomCapture
 {
     static class Program
     {
-        public const string Version = "1.0.0";
+        public const string Version = "1.2.0";
 
         [STAThread]
         static int Main(string[] args)
@@ -107,7 +108,8 @@ namespace ZoomCapture
         readonly Stream input = Console.OpenStandardInput();
         readonly Stream output = Console.OpenStandardOutput();
         readonly object writeLock = new object();
-        readonly JavaScriptSerializer json = new JavaScriptSerializer();
+        // Camera frames are a few tens of kilobytes of base64.
+        readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 8 * 1024 * 1024 };
 
         public Host(ControlsForm form, ApplicationContext context)
         {
@@ -176,6 +178,11 @@ namespace ZoomCapture
                 case "hide":
                     form.Hide();
                     break;
+                case "camera":
+                    object frame;
+                    message.TryGetValue("frame", out frame);
+                    form.SetCamera(frame as string);
+                    break;
                 case "ping":
                     Send(new Dictionary<string, object> { { "type", "pong" }, { "version", Program.Version }, { "excluded", form.ExcludedFromCapture } });
                     break;
@@ -206,7 +213,7 @@ namespace ZoomCapture
         }
     }
 
-    enum Glyph { Microphone, MicrophoneOff, Pause, Resume, Stop }
+    enum Glyph { Microphone, MicrophoneOff, Pause, Resume, Stop, Cancel }
 
     /// <summary>
     /// A flat icon button drawn to match the extension's style. A plain control (not a Win32
@@ -291,6 +298,10 @@ namespace ZoomCapture
                     case Glyph.Stop:
                         using (var path = Theme.Rounded(new RectangleF(cx - 5 * s, cy - 5 * s, 10 * s, 10 * s), 2 * s)) g.DrawPath(pen, path);
                         break;
+                    case Glyph.Cancel:
+                        g.DrawLine(pen, cx - 4.5f * s, cy - 4.5f * s, cx + 4.5f * s, cy + 4.5f * s);
+                        g.DrawLine(pen, cx + 4.5f * s, cy - 4.5f * s, cx - 4.5f * s, cy + 4.5f * s);
+                        break;
                     default:
                         using (var path = Theme.Rounded(new RectangleF(cx - 2.8f * s, cy - 7 * s, 5.6f * s, 9 * s), 2.8f * s)) g.DrawPath(pen, path);
                         g.DrawArc(pen, cx - 5.5f * s, cy - 4 * s, 11 * s, 9.5f * s, 0, 180);
@@ -324,7 +335,10 @@ namespace ZoomCapture
         }
     }
 
-    /// <summary>The floating controls: timer, then Mute, Pause/Resume and Stop. Drag anywhere else to move it.</summary>
+    /// <summary>
+    /// The floating controls: the camera preview in a circle (when the camera is on), above a bar
+    /// with the timer, then Mute, Pause/Resume and Stop. Drag anywhere else to move it.
+    /// </summary>
     sealed class ControlsForm : Form
     {
         public Host Host;
@@ -339,10 +353,14 @@ namespace ZoomCapture
         readonly Stopwatch sinceState = new Stopwatch();
         readonly Font timeFont;
         string phase = "recording";
+        int countdown;
         double elapsedMs;
         bool micAvailable;
         bool micMuted;
         float scale = 1f;
+        /// <summary>Latest camera frame (already mirrored and square), or null without a camera.</summary>
+        Image camera;
+        const float CameraSize = 168, CameraGap = 8, BarHeight = 40;
 
         public ControlsForm()
         {
@@ -358,7 +376,7 @@ namespace ZoomCapture
 
             mic.Click += delegate { Host.Command("toggleMic"); };
             pause.Click += delegate { Host.Command(phase == "paused" ? "resume" : "pause"); };
-            stop.Click += delegate { Host.Command("stop"); };
+            stop.Click += delegate { Host.Command(phase == "countdown" ? "cancel" : "stop"); };
             stop.Label = "Stop recording";
             Controls.Add(mic);
             Controls.Add(pause);
@@ -417,6 +435,7 @@ namespace ZoomCapture
             object value;
             if (message.TryGetValue("phase", out value) && value is string) phase = (string)value;
             if (message.TryGetValue("elapsedMs", out value) && value != null) elapsedMs = Convert.ToDouble(value);
+            if (message.TryGetValue("countdown", out value) && value != null) countdown = Convert.ToInt32(value);
             if (message.TryGetValue("micAvailable", out value) && value is bool) micAvailable = (bool)value;
             if (message.TryGetValue("micMuted", out value) && value is bool) micMuted = (bool)value;
             sinceState.Restart();
@@ -426,8 +445,44 @@ namespace ZoomCapture
             pause.Glyph = phase == "paused" ? Glyph.Resume : Glyph.Pause;
             pause.Label = phase == "paused" ? "Resume recording" : "Pause recording";
             tips.SetToolTip(pause, pause.Label);
+            // Counting down: only a Cancel button.
+            stop.Glyph = phase == "countdown" ? Glyph.Cancel : Glyph.Stop;
+            stop.Danger = phase != "countdown";
+            stop.Label = phase == "countdown" ? "Cancel recording" : "Stop recording";
+            tips.SetToolTip(stop, stop.Label);
             Relayout();
             Invalidate();
+        }
+
+        /// <summary>Shows a camera frame (JPEG, base64) in the circle; null removes the circle.</summary>
+        public void SetCamera(string jpegBase64)
+        {
+            Image next = null;
+            if (!string.IsNullOrEmpty(jpegBase64))
+            {
+                try
+                {
+                    using (var stream = new MemoryStream(Convert.FromBase64String(jpegBase64)))
+                    using (var decoded = Image.FromStream(stream))
+                        next = new Bitmap(decoded);
+                }
+                catch (Exception)
+                {
+                    return; // A bad frame: keep the last one.
+                }
+            }
+            var layoutChanged = (camera == null) != (next == null);
+            if (camera != null) camera.Dispose();
+            camera = next;
+            if (layoutChanged)
+            {
+                Relayout();
+                Invalidate();
+            }
+            else if (camera != null)
+            {
+                Invalidate(CameraArea);
+            }
         }
 
         public void ShowControls()
@@ -438,28 +493,51 @@ namespace ZoomCapture
 
         int S(float dip) { return (int)Math.Round(dip * scale); }
 
-        Rectangle TimeArea() { return new Rectangle(S(8), 0, S(70), Height); }
+        Rectangle TimeArea() { return new Rectangle(BarLeft + S(8), BarTop, S(TextWidth + 22), S(BarHeight)); }
+
+        /// <summary>Top of the controls bar (below the camera circle, if any), in pixels.</summary>
+        int BarTop { get { return camera != null ? S(CameraSize + CameraGap) : 0; } }
+        int barWidth;
+        int BarLeft { get { return (Width - barWidth) / 2; } }
+        Rectangle CameraArea { get { return new Rectangle((Width - S(CameraSize)) / 2, 0, S(CameraSize), S(CameraSize)); } }
+
+        bool Counting { get { return phase == "countdown"; } }
+
+        /** Width of the time or countdown text, in DIPs. */
+        float TextWidth { get { return Counting ? 80 : 52; } }
 
         void Relayout()
         {
-            const float button = 28, gap = 2, left = 80;
-            float x = left;
-            mic.Visible = micAvailable;
+            const float button = 28, gap = 2;
+            float x = 28 + TextWidth;
+            float bar = x + (micAvailable && !Counting ? button + gap : 0) + (Counting ? 0 : button + gap) + button + 4;
+            barWidth = S(bar);
+            var width = Math.Max(barWidth, camera != null ? S(CameraSize) : 0);
+            var left = (width - barWidth) / 2;
+            var micShown = micAvailable && !Counting;
+            mic.Visible = micShown;
+            pause.Visible = !Counting;
             foreach (var b in new[] { mic, pause, stop })
             {
                 // (Not b.Visible: it reads false for every control until the window is shown.)
-                if (b == mic && !micAvailable) continue;
-                b.SetBounds(S(x), S(6), S(button), S(button));
+                if ((b == mic && !micShown) || (b == pause && Counting)) continue;
+                b.SetBounds(left + S(x), BarTop + S(6), S(button), S(button));
                 x += button + gap;
             }
-            var size = new Size(S(x + 4), S(40));
+            var size = new Size(width, BarTop + S(BarHeight));
             if (Size != size)
             {
-                var anchor = Location;
+                // Grow and shrink around the bar: it stays where the user put it.
+                var anchor = new Point(Left + Width / 2, Bottom);
                 Size = size;
-                Location = anchor;
+                if (anchor.Y > 0) Location = KeepOnScreen(new Point(anchor.X - Width / 2, anchor.Y - Height));
             }
-            using (var path = Theme.Rounded(new RectangleF(0, 0, Width, Height), S(12))) Region = new Region(path);
+            // Shaped window: the bar, plus the camera circle above it.
+            using (var shape = Theme.Rounded(new RectangleF(left, BarTop, barWidth, S(BarHeight)), S(12)))
+            {
+                if (camera != null) shape.AddEllipse(CameraArea);
+                Region = new Region(shape);
+            }
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -467,21 +545,41 @@ namespace ZoomCapture
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            using (var path = Theme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f), S(12)))
+            if (camera != null)
+            {
+                g.Clear(Theme.Surface);
+                var area = CameraArea;
+                using (var circle = new GraphicsPath())
+                {
+                    circle.AddEllipse(area);
+                    var state = g.Save();
+                    g.SetClip(circle);
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(camera, area);
+                    g.Restore(state);
+                }
+                using (var ring = new Pen(Color.FromArgb(204, 255, 255, 255), 2 * scale))
+                    g.DrawEllipse(ring, area.X + scale, area.Y + scale, area.Width - 2 * scale, area.Height - 2 * scale);
+            }
+            var barTop = BarTop;
+            using (var path = Theme.Rounded(new RectangleF(BarLeft + 0.5f, barTop + 0.5f, barWidth - 1.5f, S(BarHeight) - 1.5f), S(12)))
             using (var pen = new Pen(Theme.Line, Math.Max(1, scale)))
                 g.DrawPath(pen, path);
 
             var recording = phase == "recording";
             var shown = recording ? elapsedMs + sinceState.Elapsed.TotalMilliseconds : elapsedMs;
+            if (Counting) recording = false;
             // A gently pulsing red dot while recording, amber while paused.
             var alpha = recording ? (int)(170 + 85 * Math.Abs(Math.Sin(sinceState.Elapsed.TotalSeconds * 2.5))) : 255;
             using (var dot = new SolidBrush(Color.FromArgb(alpha, recording ? Theme.Rec : Theme.Warning)))
-                g.FillEllipse(dot, S(13), Height / 2f - S(4), S(8), S(8));
+                g.FillEllipse(dot, BarLeft + S(13), barTop + S(BarHeight) / 2f - S(4), S(8), S(8));
             var total = (int)(shown / 1000);
-            var text = total >= 3600
-                ? string.Format("{0}:{1:00}:{2:00}", total / 3600, total / 60 % 60, total % 60)
-                : string.Format("{0:00}:{1:00}", total / 60, total % 60);
-            TextRenderer.DrawText(g, text, timeFont, new Rectangle(S(26), 0, S(52), Height), Theme.Fg,
+            var text = Counting
+                ? "Starts in " + Math.Max(0, countdown)
+                : total >= 3600
+                    ? string.Format("{0}:{1:00}:{2:00}", total / 3600, total / 60 % 60, total % 60)
+                    : string.Format("{0:00}:{1:00}", total / 60, total % 60);
+            TextRenderer.DrawText(g, text, timeFont, new Rectangle(BarLeft + S(26), barTop, S(TextWidth), S(BarHeight)), Theme.Fg,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.Left | TextFormatFlags.NoPadding);
         }
 
@@ -496,15 +594,16 @@ namespace ZoomCapture
 
         static string PositionFile
         {
-            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZoomCapture", "controls-position.txt"); }
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZoomCapture", "controls-anchor.txt"); }
         }
 
         Point RestorePosition()
         {
             try
             {
+                // Saved as the bar's bottom centre, so it means the same with or without the camera.
                 var parts = File.ReadAllText(PositionFile).Split(',');
-                var saved = new Point(int.Parse(parts[0]), int.Parse(parts[1]));
+                var saved = new Point(int.Parse(parts[0]) - Width / 2, int.Parse(parts[1]) - Height);
                 // Only if it is still on a screen (monitors may have changed).
                 foreach (var screen in Screen.AllScreens)
                     if (screen.WorkingArea.IntersectsWith(new Rectangle(saved, Size))) return saved;
@@ -514,12 +613,21 @@ namespace ZoomCapture
             return new Point(area.Left + (area.Width - Width) / 2, area.Bottom - Height - S(24));
         }
 
+        /// <summary>Moves a position so the whole window is inside the working area of its screen.</summary>
+        Point KeepOnScreen(Point location)
+        {
+            var area = Screen.FromRectangle(new Rectangle(location, Size)).WorkingArea;
+            return new Point(
+                Math.Max(area.Left, Math.Min(location.X, area.Right - Width)),
+                Math.Max(area.Top, Math.Min(location.Y, area.Bottom - Height)));
+        }
+
         void SavePosition()
         {
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(PositionFile));
-                File.WriteAllText(PositionFile, Location.X + "," + Location.Y);
+                File.WriteAllText(PositionFile, (Left + Width / 2) + "," + Bottom);
             }
             catch (Exception) { }
         }

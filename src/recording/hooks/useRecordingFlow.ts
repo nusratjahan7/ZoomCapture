@@ -43,6 +43,11 @@ export interface FlowCallbacks {
   /** Stop every input stream once the recorders are done with them. */
   releaseMedia: () => void;
   onSaved: (recordingId: string) => void;
+  /**
+   * Runs right before the recorders start (after the countdown), e.g. to take a window off the
+   * screen so it isn't in the first frames.
+   */
+  beforeStart?: () => Promise<void> | void;
 }
 
 export interface SaveFailure {
@@ -163,6 +168,8 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
 
     let controller: RecordingController | null = null;
     try {
+      await callbacksRef.current.beforeStart?.();
+      if (phaseRef.current !== 'starting') return;
       controller = new RecordingController({
         sessionId,
         inputs: { display, camera, microphone },

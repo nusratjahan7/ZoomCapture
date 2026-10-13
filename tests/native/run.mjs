@@ -66,6 +66,11 @@ function startHelper(exe, extraArgs = []) {
         check();
       });
     },
+    /** Resolves once the helper has handled everything sent so far (it handles messages in order). */
+    async sync() {
+      this.send({ type: 'ping' });
+      await this.next((m) => m.type === 'pong');
+    },
     close() {
       child.stdin.end();
       return exited;
@@ -84,7 +89,7 @@ async function test(name, run) {
     console.log(
       `  ✗ ${name}\n    ${String(error?.stack ?? error)
         .split('\n')
-        .slice(0, 4)
+        .slice(0, 8)
         .join('\n    ')}`,
     );
   }
@@ -105,7 +110,7 @@ const state = {
 await test('protocol: ready, ping, show, and it quits when Chrome closes the connection', async () => {
   const helper = startHelper(exe);
   const ready = await helper.next((m) => m.type === 'ready');
-  assert.equal(ready.version, '1.0.0');
+  assert.equal(ready.version, '1.2.0');
   assert.equal(ready.excluded, true, 'window excluded from capture');
   helper.send({ type: 'ping' });
   assert.equal((await helper.next((m) => m.type === 'pong')).excluded, true);
@@ -133,24 +138,69 @@ await test('capture: on screen, but left out of a screen capture', async () => {
 
 await test('buttons: pause, mute and stop send commands; state changes the buttons', async () => {
   const helper = startHelper(exe);
+  /** Clicks a button and returns the command it sent; one retry if another window took the click. */
+  const press = async (name) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.equal(probe(['-Action', 'Click', '-Name', name, '-ProcessId', helper.pid]).clicked, true, `${name} clickable`);
+      const command = await helper.next((m) => m.type === 'command', 2000).catch(() => null);
+      if (command) return command.action;
+    }
+    throw new Error(`${name}: no command`);
+  };
   try {
     await helper.next((m) => m.type === 'ready');
     helper.send({ type: 'show', ...state });
-    assert.equal(probe(['-Action', 'Click', '-Name', 'Pause recording', '-ProcessId', helper.pid]).clicked, true);
-    assert.equal((await helper.next((m) => m.type === 'command')).action, 'pause');
+    assert.equal(await press('Pause recording'), 'pause');
     helper.send({ type: 'state', ...state, phase: 'paused' });
-    assert.equal(probe(['-Action', 'Click', '-Name', 'Resume recording', '-ProcessId', helper.pid]).clicked, true);
-    assert.equal((await helper.next((m) => m.type === 'command')).action, 'resume');
-    assert.equal(probe(['-Action', 'Click', '-Name', 'Mute microphone', '-ProcessId', helper.pid]).clicked, true);
-    assert.equal((await helper.next((m) => m.type === 'command')).action, 'toggleMic');
+    await helper.sync();
+    assert.equal(await press('Resume recording'), 'resume');
+    assert.equal(await press('Mute microphone'), 'toggleMic');
     helper.send({ type: 'state', ...state, micMuted: true });
-    assert.equal(probe(['-Action', 'Click', '-Name', 'Unmute microphone', '-ProcessId', helper.pid]).clicked, true);
-    assert.equal((await helper.next((m) => m.type === 'command')).action, 'toggleMic');
-    assert.equal(probe(['-Action', 'Click', '-Name', 'Stop recording', '-ProcessId', helper.pid]).clicked, true);
-    assert.equal((await helper.next((m) => m.type === 'command')).action, 'stop');
+    await helper.sync();
+    assert.equal(await press('Unmute microphone'), 'toggleMic');
+    assert.equal(await press('Stop recording'), 'stop');
     // Without a microphone there is no mute button.
     helper.send({ type: 'state', ...state, micAvailable: false });
+    await helper.sync();
     assert.equal(probe(['-Action', 'Click', '-Name', 'Mute microphone', '-ProcessId', helper.pid]).clicked, false);
+    // Counting down: only Cancel (no pause or mute yet).
+    helper.send({ type: 'state', ...state, phase: 'countdown', countdown: 3 });
+    await helper.sync();
+    assert.equal(probe(['-Action', 'Click', '-Name', 'Pause recording', '-ProcessId', helper.pid]).clicked, false);
+    assert.equal(await press('Cancel recording'), 'cancel');
+  } finally {
+    await helper.close();
+  }
+});
+
+await test('camera: a circle above the controls, also left out of a screen capture', async () => {
+  // A 320×320 JPEG standing in for a camera frame.
+  const jpeg = execFileSync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-Command',
+      'Add-Type -AssemblyName System.Drawing; $b = New-Object Drawing.Bitmap 320,320; $g = [Drawing.Graphics]::FromImage($b); $g.Clear([Drawing.Color]::DarkSlateBlue); $m = New-Object IO.MemoryStream; $b.Save($m, [Drawing.Imaging.ImageFormat]::Jpeg); [Convert]::ToBase64String($m.ToArray())',
+    ],
+    { encoding: 'utf8' },
+  ).trim();
+  const helper = startHelper(exe);
+  try {
+    await helper.next((m) => m.type === 'ready');
+    helper.send({ type: 'show', ...state });
+    await helper.sync();
+    const bar = probe(['-Action', 'Capture', '-ProcessId', helper.pid]).rect;
+    helper.send({ type: 'camera', frame: jpeg });
+    await helper.sync();
+    const withCamera = probe(['-Action', 'Capture', '-ProcessId', helper.pid]);
+    // Taller by the circle, grown upwards: the bar stays where it was.
+    assert.ok(withCamera.rect.height > bar.height * 3, `camera shown: ${JSON.stringify([bar, withCamera.rect])}`);
+    assert.ok(Math.abs(withCamera.rect.top + withCamera.rect.height - (bar.top + bar.height)) <= 1, 'bar kept in place');
+    assert.ok(withCamera.white > 0.9, `camera left out of the capture: ${JSON.stringify(withCamera)}`);
+    // Camera off: back to the bar.
+    helper.send({ type: 'camera', frame: null });
+    await helper.sync();
+    assert.equal(probe(['-Action', 'Capture', '-ProcessId', helper.pid]).rect.height, bar.height);
   } finally {
     await helper.close();
   }

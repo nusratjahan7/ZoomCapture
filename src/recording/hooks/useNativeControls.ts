@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { NativeControls, type NativeCommand, type NativeControlsState } from '@/services/nativeControls';
+import { NativeControls, streamCameraFrames, type NativeCommand, type NativeControlsState } from '@/services/nativeControls';
 
 export type NativeControlsStatus =
   | { state: 'off' }
@@ -13,8 +13,14 @@ export type NativeControlsStatus =
  * and keeps it in sync: timer, paused state and microphone. Its buttons call `onCommand`. The
  * helper quits when this stops being active or the studio closes.
  */
-export function useNativeControls(input: { active: boolean; state: NativeControlsState; onCommand: (command: NativeCommand) => void }): NativeControlsStatus {
-  const { active, state } = input;
+export function useNativeControls(input: {
+  active: boolean;
+  state: NativeControlsState;
+  onCommand: (command: NativeCommand) => void;
+  /** Shown in a circle above the controls (null: no camera, or hidden). */
+  camera: MediaStream | null;
+}): NativeControlsStatus {
+  const { active, state, camera } = input;
   const [status, setStatus] = useState<NativeControlsStatus>({ state: 'off' });
   const controls = useRef<NativeControls | null>(null);
   const latest = useRef(input);
@@ -56,7 +62,21 @@ export function useNativeControls(input: { active: boolean; state: NativeControl
   const second = Math.floor(state.elapsedMs / 1000);
   useEffect(() => {
     controls.current?.update(latest.current.state);
-  }, [state.phase, state.micAvailable, state.micMuted, second, status.state]);
+  }, [state.phase, state.countdown, state.micAvailable, state.micMuted, second, status.state]);
+
+  // The camera preview: frames while shown, and nothing once the camera is off or hidden.
+  const shown = status.state === 'shown';
+  useEffect(() => {
+    const connected = controls.current;
+    const track = camera?.getVideoTracks()[0];
+    if (!shown || !connected || !track || track.readyState === 'ended') return;
+    const abort = new AbortController();
+    void streamCameraFrames(track, (frame) => connected.sendCamera(frame), abort.signal);
+    return () => {
+      abort.abort();
+      connected.sendCamera(null);
+    };
+  }, [shown, camera]);
 
   return status;
 }
