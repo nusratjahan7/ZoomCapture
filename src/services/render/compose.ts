@@ -1,4 +1,4 @@
-import { clipAt, isMediaClip } from '@/services/timeline/model';
+import { clipAt } from '@/services/timeline/model';
 import { clipsOfAsset, mapClicksToTimeline, mapCursorToTimeline } from '@/services/timeline/mapping';
 import type { Size } from '@/services/zoom/coordinates';
 import type { AspectRatio, ExportSettings, MediaClip, Project, Recording, TextClip, Timeline, TimelineTrack } from '@/types';
@@ -41,17 +41,6 @@ export function activeVisuals(timeline: Timeline, timeMs: number): ActiveVisuals
     const active = { track, clip, sourceMs: clip.sourceInMs + (timeMs - clip.startMs) };
     if (track.kind === 'video') result.layers.push(active);
     else if (track.kind === 'camera') result.camera = active;
-  }
-  return result;
-}
-
-/** Audible media clips at a time (for preview players), bottom track first. */
-export function activeAudio(timeline: Timeline, timeMs: number): ActiveMedia[] {
-  const result: ActiveMedia[] = [];
-  for (const track of timeline.tracks) {
-    if (track.muted || (track.kind !== 'audio' && track.kind !== 'music' && track.kind !== 'video')) continue;
-    const clip = clipAt(track, timeMs);
-    if (clip && isMediaClip(clip) && !clip.muted) result.push({ track, clip, sourceMs: clip.sourceInMs + (timeMs - clip.startMs) });
   }
   return result;
 }

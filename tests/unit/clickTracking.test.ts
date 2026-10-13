@@ -96,14 +96,15 @@ describe('unsupported capture sources', () => {
   const target = { tabId: 7, title: 'Docs', origin: 'https://docs.example' };
 
   it('supports only the tab ZoomCapture was opened on, captured directly', () => {
-    expect(clickTrackingSupport({ trackClicks: true, surface: 'browser', capturedTarget: target })).toEqual({ supported: true });
+    expect(clickTrackingSupport({ trackClicks: true, surface: 'browser', capturedTarget: target })).toEqual({ supported: true, scope: 'tab' });
+  });
+
+  it('tracks clicks in Chrome tabs while recording the entire screen', () => {
+    expect(clickTrackingSupport({ trackClicks: true, surface: 'monitor', capturedTarget: null })).toEqual({ supported: true, scope: 'screen' });
+    expect(clickTrackingSupport({ trackClicks: false, surface: 'monitor', capturedTarget: null }).supported).toBe(false);
   });
 
   it('explains why other sources are not tracked', () => {
-    expect(clickTrackingSupport({ trackClicks: true, surface: 'monitor', capturedTarget: null })).toEqual({
-      supported: false,
-      reason: UNSUPPORTED_REASONS.screen,
-    });
     expect(clickTrackingSupport({ trackClicks: true, surface: 'window', capturedTarget: null })).toEqual({
       supported: false,
       reason: UNSUPPORTED_REASONS.window,
@@ -121,9 +122,7 @@ describe('unsupported capture sources', () => {
   });
 
   it('never claims desktop-wide tracking', () => {
-    for (const reason of [UNSUPPORTED_REASONS.screen, UNSUPPORTED_REASONS.window]) {
-      expect(reason).toMatch(/can only observe clicks inside a browser tab/);
-    }
+    expect(UNSUPPORTED_REASONS.window).toMatch(/can only observe clicks inside a browser tab/);
   });
 
   it('recognises pages where Chrome forbids extension scripts', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { FolderOpen, KeyRound, Mic, PictureInPicture2, RotateCcw, Video, Volume2 } from 'lucide-react';
+import { EyeOff, FolderOpen, KeyRound, Mic, PictureInPicture2, RotateCcw, Video, Volume2 } from 'lucide-react';
 import { sendMessage } from '@/services/messaging';
 import { resetSettings } from '@/services/settings';
 import { subscribeLibrary } from '@/services/storage/libraryEvents';
@@ -169,9 +169,17 @@ export function SettingsPage() {
                 <Toggle
                   icon={PictureInPicture2}
                   label="Floating camera bubble and controls"
-                  description="An always-on-top window you can move anywhere. It is visible in recordings of your entire screen."
+                  description="A small always-on-top window you can move anywhere, with the countdown and recording controls."
                   checked={settings.floatingControls}
                   onCheckedChange={(floatingControls) => save({ floatingControls })}
+                />
+                <Toggle
+                  icon={EyeOff}
+                  label="Hide it while recording"
+                  description="Closes the floating window when recording starts, so it doesn’t appear in recordings of your screen. Pause or stop from the ZoomCapture toolbar icon or the studio tab."
+                  checked={settings.hideFloatingWhileRecording}
+                  disabled={!settings.floatingControls}
+                  onCheckedChange={(hideFloatingWhileRecording) => save({ hideFloatingWhileRecording })}
                 />
               </div>
             </Panel>

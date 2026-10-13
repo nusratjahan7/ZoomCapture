@@ -110,7 +110,8 @@ export interface RenderEffects {
 
 /** How clicks were (or were not) tracked for a recording. */
 export interface ClickTrackingInfo {
-  mode: 'tab' | 'unsupported';
+  /** `screen`: the entire screen was recorded and clicks were tracked in Chrome tabs on it. */
+  mode: 'tab' | 'screen' | 'unsupported';
   /** Why tracking was not available or stopped (shown to the user). */
   reason?: string;
   tabTitle?: string;

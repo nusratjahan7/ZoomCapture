@@ -70,9 +70,10 @@ export function AutoZoomSettingsPanel({
         <p className="flex gap-2 rounded-xl bg-surface-2 p-3 text-xs leading-relaxed text-fg-muted">
           <Info size={14} aria-hidden className="mt-0.5 shrink-0" />
           <span>
-            Clicks can be tracked only when you record the browser tab you opened ZoomCapture on. Chrome extensions can’t see
-            clicks in other apps, so recordings of your entire screen or a window, and tabs chosen in Chrome’s picker, get no
-            automatic zoom. You can still add zoom effects by hand in the editor.
+            Clicks are tracked when you record the browser tab you opened ZoomCapture on, or your entire screen (inside Chrome
+            tabs, after you allow it once). Chrome extensions can’t see clicks in other apps, so those clicks, recordings of a
+            single window and tabs chosen in Chrome’s picker get no automatic zoom. You can still add zoom effects by hand in the
+            editor.
           </span>
         </p>
       </div>

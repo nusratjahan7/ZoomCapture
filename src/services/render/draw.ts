@@ -141,8 +141,7 @@ function drawText(ctx: Context2D, width: number, height: number, clip: TextClip)
 /** Greedy word wrap; explicit line breaks are kept. Very long words are left to overflow. */
 function wrapText(ctx: Context2D, text: string, maxWidth: number): string[] {
   const lines: string[] = [];
-  for (const paragraph of text.split(/?
-/)) {
+  for (const paragraph of text.replace(/\r/g, '').split('\n')) {
     let line = '';
     for (const word of paragraph.split(/\s+/).filter(Boolean)) {
       const candidate = line ? `${line} ${word}` : word;

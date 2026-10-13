@@ -14,12 +14,14 @@ export function ClickTrackingPanel({
   recording,
   autoZoomEnabled,
   onAllowOnSite,
+  onAllowScreen,
 }: {
   status: TrackingStatus;
   clicks: number;
   recording: boolean;
   autoZoomEnabled: boolean;
   onAllowOnSite: () => Promise<boolean>;
+  onAllowScreen: () => Promise<boolean>;
 }) {
   const [requesting, setRequesting] = useState(false);
   const tone =
@@ -35,7 +37,8 @@ export function ClickTrackingPanel({
 
   const title = {
     active: 'Tracking clicks',
-    connecting: 'Connecting to the tab…',
+    connecting: 'Connecting…',
+    'needs-permission': 'Allow click tracking in Chrome',
     paused: 'Click tracking paused',
     unsupported: 'Clicks are not tracked',
     error: 'Click tracking stopped',
@@ -56,6 +59,26 @@ export function ClickTrackingPanel({
             </p>
           )}
           {'reason' in status && <p className="mt-0.5 text-xs text-fg-muted">{status.reason}</p>}
+          {status.state === 'needs-permission' && (
+            <>
+              <p className="mt-0.5 text-xs text-fg-muted">
+                While recording your entire screen, ZoomCapture can follow your clicks inside Chrome tabs (not in other apps) to zoom in on them. Chrome will ask to let
+                ZoomCapture read clicks on websites; you can remove that access at any time in chrome://extensions.
+              </p>
+              <Button
+                size="sm"
+                className="mt-2"
+                icon={MousePointerClick}
+                loading={requesting}
+                onClick={() => {
+                  setRequesting(true);
+                  void onAllowScreen().finally(() => setRequesting(false));
+                }}
+              >
+                Allow click tracking
+              </Button>
+            </>
+          )}
           {status.state === 'paused' && (
             <Button
               size="sm"
@@ -75,7 +98,7 @@ export function ClickTrackingPanel({
       {status.state !== 'unsupported' && (
         <p className="mt-3 flex gap-2 border-t border-line pt-3 text-xs text-fg-subtle">
           <ShieldCheck size={14} aria-hidden className="mt-0.5 shrink-0" />
-          Only clicks and pointer positions in this tab are recorded, never page content or typing.
+          Only clicks and pointer positions {status.state === 'active' && status.scope === 'screen' ? 'in Chrome tabs' : 'in this tab'} are recorded, never page content or typing.
           {!autoZoomEnabled && ' Automatic zoom is off, so no effects are created; you can generate them later in the editor.'}
         </p>
       )}

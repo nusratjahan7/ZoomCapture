@@ -3,8 +3,8 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
-**Status: Module 05 (rendering engine) is complete.** Zoom effects are drawn on a canvas by one rendering service that powers both the editor preview and **Render video**, which produces a new WebM file with the zoom applied. The rendered file shows the same zoom at the same timestamps as the preview (verified frame by frame in the end-to-end test), with the original audio in sync. The original recording is never changed.
-Modules 01–04 (foundation, recording engine, recording library and storage, click tracking and automatic zoom) are still in place and tested.
+**Status: Module 06 (video editor) is complete.** The editor has a media library, a canvas preview, a properties panel and a multi-track timeline. On the timeline you can split, move, trim and delete clips, edit zoom effects, add text and imported media, and change the aspect ratio. Every edit can be undone and is saved automatically. **Export video** renders the edited timeline. The original recording is never changed.
+Modules 01–05 (foundation, recording engine, recording library and storage, click tracking and automatic zoom, rendering engine) are still in place.
 
 ---
 
@@ -26,7 +26,7 @@ npm run test:e2e:install  # once: download Chrome for Testing into .cache/browse
 npm run test:e2e     # build, then drive the real extension in Chrome for Testing
 ```
 
-`npm run test:e2e` uses `CHROME_PATH` if set, otherwise the Chrome for Testing installed by `test:e2e:install`. Branded Chrome no longer loads unpacked extensions from the command line, so it can't be used here.
+`npm run test:e2e` uses `CHROME_PATH` if set, otherwise the Chrome for Testing installed by `test:e2e:install`. The extension is loaded over the DevTools protocol, so an installed Chrome works too, e.g. `CHROME_PATH="C:/Program Files/Google/Chrome/Application/chrome.exe"` (useful where Windows blocks the downloaded Chrome for Testing). `node tests/e2e/screenshots.mjs` saves editor screenshots at several window sizes to `.cache/screenshots/`.
 
 ## Load in Chrome
 
@@ -95,7 +95,7 @@ Recording Studio tab
 - **Crash safety.** Chunks reach IndexedDB about every second. If the studio tab is closed mid-recording, the service worker finalizes everything captured so far into a project. If the browser itself crashes, the leftover draft shows up in the library under **Unfinished recordings**, with Recover and Discard.
 - **WebM duration.** Chrome writes WebM without a duration, so players can't seek it properly. `webmDuration.ts` patches the duration into the header by rewriting only the first bytes, so even very long recordings are never loaded into memory.
 - **Controls everywhere.** Start, Pause, Resume and Stop are available in the studio, in the toolbar popup (forwarded by the background to the studio as a `StudioCommand`), and in a floating window. The badge shows `REC` or `❚❚`, and timers show recorded time excluding pauses.
-- **Movable camera bubble.** In the studio, you drag the bubble (or move it with the arrow keys) over the screen preview. Its position and size are saved with the project and drive the camera overlay in the editor. While recording, an always-on-top Document Picture-in-Picture window shows the camera bubble and controls. You can move it anywhere, including over other apps. This can be turned off in Settings. **Note:** that window is part of your screen, so it appears in entire-screen recordings.
+- **Movable camera bubble.** In the studio, you drag the bubble (or move it with the arrow keys) over the screen preview. Its position and size are saved with the project and drive the camera overlay in the editor. A small always-on-top Document Picture-in-Picture window shows the camera bubble and controls. You can move it anywhere, including over other apps. That window is part of your screen, so by default it shows only the countdown and **closes when recording starts**, keeping it out of entire-screen recordings; the studio then says to pause or stop from the toolbar icon or the studio tab. Settings → *Hide it while recording* keeps it open instead (it then appears in screen recordings), and *Floating camera bubble and controls* turns it off.
 - **Failure handling.** Each case is handled as follows:
   - **Permission denied / device not found:** the panel shows an error with **Try again**.
   - **Selected device missing:** falls back to the system default and says so.
@@ -120,7 +120,7 @@ What Chrome lets an extension capture depends on the source. ZoomCapture tells y
 ### Output format and export
 
 Recordings are WebM (VP9 or VP8 video, Opus audio), which is what Chrome's MediaRecorder produces reliably on every platform. **Download** (**Download original** in the editor) saves that file without re-encoding.
-**Render video** in the editor produces a new WebM with zoom effects, overlays and the camera bubble applied (see [Rendering engine](#rendering-engine-module-05)). MP4 and GIF are not produced yet: asking the `services/export` interface for them raises `ExportUnavailableError` instead of producing a file that is wrongly labelled or empty.
+**Export video** in the editor renders the edited timeline (cuts, layers, text, zoom effects, overlays, camera bubble and mixed audio) into a new WebM (see [Video editor](#video-editor-module-06) and [Rendering engine](#rendering-engine-module-05)). MP4 and GIF are not produced yet: asking the `services/export` interface for them raises `ExportUnavailableError` instead of producing a file that is wrongly labelled or empty.
 
 ## Recording library and storage (Module 03)
 
@@ -146,6 +146,7 @@ Each schema version is one step that is never edited after release. Steps run in
 | v2 | `recordingDrafts`, `recordingChunks` (Module 02) |
 | v3 | `recordings` store; each v2 project is split into a `Recording` plus an editable `Project`; assets get `origin` and `recordingId`; new indexes (Module 03) |
 | v4 | Raw clicks move to `Recording.interactions` (original data), and `Recording.clickTracking` is added. Zoom markers move to the new model (time, duration, transition, position mode, annotation, effect, enabled). `Project.schemaVersion` becomes 2 (Module 04) |
+| v5 | Every timeline clip gets a `type` (`media`; `text` clips are new), clips are kept sorted per track, and projects get an `aspectRatio` (`source`). `Project.schemaVersion` becomes 3 (Module 06) |
 
 A project without playable media is left untouched rather than guessed at. `Project.schemaVersion` versions the project data itself, for future in-record upgrades.
 
@@ -190,20 +191,24 @@ Every write goes through `withTransaction()`, which aborts on any error, includi
 | `tests/unit/render.test.ts` | **Rendering calculations (Module 05):** camera transform and pixel crop at any resolution, edge clamping, the focus point always visible (2000 random cases), transitions never leaving the frame, inverse mapping; zoom timing (ease in, hold, ease out, intensity, transition length); **overlapping and nested effects without jumps**, independent of evaluation order; follow-cursor smoothing and the click fallback; pointer interpolation; letterboxed page → frame mapping; click emphasis, cursor highlight and annotation overlays; output size, encoder fallbacks and frame times; `drawFrame` crop and camera bubble against a mock canvas. |
 | `tests/unit/renderVideo.test.ts` | Rendering failures: unreadable file, **codec the browser can't decode** (named in the message); high-resolution fallback when the encoder rejects 4K; holding source frames for a constant frame rate with every decoded frame released, including on cancel. |
 | `tests/e2e/module04.mjs` | In real Chrome: no install-time host access; toolbar click on a demo page → *Record this tab* → on-page notice (hidden while recording) → real clicks normalized correctly, synthetic/right/duplicate clicks ignored, **timeline gap matches the real gap** → automatic markers saved → editor preview zooms at marker time; edit, duplicate, delete with undo, add, all kept after reload with the original clicks unchanged → same-site navigation re-attaches; another site pauses and a toolbar click resumes → screen recording shows the limitation and creates no automatic zoom. |
-| `tests/e2e/module05.mjs` | In real Chrome, recording a demo page (coloured grid; beeps on every click, flashes on the first): pointer path recorded at the right place → canvas preview while seeking (a corner zoom stays inside the frame), playing at 2× and **scrubbing** the timeline → switch an effect to follow-cursor, **drag an effect** to a new time, turn on the cursor highlight → **Render video** → the rendered file matches the preview at six moments (before, zooming in, following the cursor, zooming out, a moved effect, holding at a corner): mean difference ≤ 1 of 255, while a 250 ms offset differs by 25–60 → **audio in sync**: the beep starts at the same time in the original and the rendered file, and the flash appears on the same frame. |
+| `tests/e2e/module05.mjs` | (Updated for the Module 06 editor.) In real Chrome, recording a demo page (coloured grid; beeps on every click, flashes on the first): pointer path recorded at the right place → canvas preview while seeking (a corner zoom stays inside the frame), playing at 2× and **scrubbing** the timeline → switch an effect to follow-cursor, **drag an effect** to a new time, turn on the cursor highlight → **Export video** → the rendered file matches the preview at six moments (before, zooming in, following the cursor, zooming out, a moved effect, holding at a corner): mean difference ≤ 1 of 255, while a 250 ms offset differs by 25–60 → **audio in sync**: the beep starts at the same time in the original and the rendered file, and the flash appears on the same frame. |
+| `tests/unit/timeline.test.ts` | **Timeline editing (Module 06):** moving (only the position changes, never overlapping, across compatible tracks, carrying zoom effects, locked tracks), **trimming** (start and source in-point together, limits: media length, neighbour, minimum, images), **splitting** (media and text, everything under the playhead, refusals), **deleting**, placing media and text, tracks (reorder, remove only empty), snapping, recorded clicks and pointer path mapped through cuts, layer composition, output sizes and letterboxing. |
+| `tests/unit/editorStore.test.ts` | **Undo/redo** (history, merging quick edits, every operation undone and redone back to the original), refused edits, **autosave** (debounced, status, failure keeps edits and retries, flush), **reopening an edited project** after closing the database (edits kept, original recording untouched, fresh history), importing and removing media files. |
+| `tests/e2e/module06.mjs` | In real Chrome on a recording: editor layout → split at the playhead (`S`) → select and delete → undo/redo (keys and toolbar) → **move** and **trim** by dragging → keyboard nudge → add text and change the aspect ratio → autosave → **reload** shows every edit → leaving with unsaved changes asks first → export renders the edited length, square for 1:1. |
 | `tests/e2e/run.mjs` | In real Chrome: record, then save with progress and a thumbnail → rename (including validation) → **close and reopen the browser** → library still shows everything → preview (object URL revoked) → download (`E2E demo.webm`) → delete (cancel, then confirm; every row removed) → disk full: error, nothing lost, Retry saving → disk full, quit, reopen, Recover from the library. |
 
 ## Click tracking and automatic zoom (Module 04)
 
 ### What is tracked, and where
 
-Chrome extensions can't see clicks in other applications or on the desktop, so ZoomCapture **does not claim to track clicks for screen or window recordings**. Tracking depends on the source:
+Chrome extensions can't see clicks in other applications or on the desktop. ZoomCapture tracks clicks inside Chrome's web pages only, and says so wherever it matters. Tracking depends on the source:
 
 | What you record | Click tracking | Why |
 | --- | --- | --- |
 | **The tab you opened ZoomCapture on** (popup → *Browser Tab* → *Record this tab*) | **Yes** | Clicking the toolbar icon grants `activeTab` for that tab. ZoomCapture captures exactly that tab with `tabCapture` and puts the tracker into it with `scripting`. |
 | A tab chosen in Chrome's picker (*Choose another tab*) | No | The picker doesn't tell an extension which tab was chosen, so clicks can't be matched to the video. |
-| Entire screen, or an application window | No | Content scripts only run inside web pages; clicks elsewhere are invisible to extensions. |
+| **Entire screen** | **Yes, inside Chrome tabs**, once allowed | The studio asks first (**Allow click tracking**, which requests the optional access to websites). The tracker then runs in every website tab, including tabs opened or reloaded while recording, and reports positions relative to the screen (`MouseEvent.screenX/Y` against the screen's size), so they line up with the recorded picture. Clicks in other apps, on the desktop and in Chrome's own toolbar are not seen. If access isn't allowed, nothing is tracked and the recording says why. |
+| An application window | No | The picker doesn't say which window was chosen or where it is, so clicks can't be placed in the video. |
 | Browser pages (`chrome://`, other extensions, the Chrome Web Store) | No | Chrome doesn't let extensions run scripts there. The popup says so. |
 
 **Fallback:** the studio's *Automatic zoom* panel gives the exact reason for every unsupported source. Recordings without tracked clicks get no automatic effects; the editor says so and offers **Add at playhead** to place zoom effects by hand.
@@ -215,7 +220,7 @@ Chrome extensions can't see clicks in other applications or on the desktop, so Z
 ### Transparency and privacy
 
 - The tracker records **only** the position (as a fraction of the visible page) and the time of primary-button presses and, while recording, where the pointer moves (sampled at most ~30 times a second, for follow-cursor zoom and the cursor highlight): no page content, element names, text, keystrokes or URLs. (The site's origin is shown in the studio.)
-- While a tracked tab isn't recording, it shows an on-page notice: *ZoomCapture is tracking clicks in this tab for automatic zoom*. The notice hides from the countdown on, so it never appears in the video. The studio shows whether tracking is on, for which site, and a live count of clicks captured.
+- While a tracked tab isn't recording, it shows an on-page notice: *ZoomCapture is tracking clicks in this tab for automatic zoom* (for a screen recording: *…in Chrome tabs for your screen recording*). The notice hides from the countdown on, so it never appears in the video. The studio shows whether tracking is on, for which site, and a live count of clicks captured.
 - When the session ends (saved, cancelled or tab closed), the tracker removes its listeners and the notice.
 - Settings → *Automatic zoom*: **Track clicks while recording a tab** (on/off) and **Create zoom effects automatically** (on/off; when off, clicks are still kept so effects can be generated later), plus defaults for **zoom level**, **duration** and **transition speed** (slow 900 ms / normal 600 ms / fast 350 ms).
 
@@ -238,6 +243,7 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 ```
 
 - **Timestamp synchronization:** each click carries the moment it happened in the page (`performance.timeOrigin + event.timeStamp`), not when the message arrived. `RecordingClock` keeps the history of recording segments, so a click is placed by when it happened, even if its message is processed later or during a pause. Clicks made while paused are ignored. In the end-to-end test, the gap between two clicks on the timeline matched the real gap within 150 ms.
+- **Screen recordings:** positions are taken against the screen the Chrome window is on (`screen.width/height`, origin `screen.availLeft/availTop`), then mapped into the frame the same way. On a screen with the taskbar on its left or top edge, positions shift by the taskbar's size; with several monitors, clicks are placed as if Chrome's screen is the one recorded.
 - **Coordinates:** clicks and pointer samples are normalized to the visible viewport (including pinch-zoom offsets), then mapped into the recorded video frame with `pageToFrame()`. That matters because tab capture letterboxes the page when its shape differs from the frame's. Tab capture is also asked for frames in the page's own aspect ratio, so normally there are no bars at all. A marker stays on the same spot at any output size. `mapToOutput()` converts to pixels for any output size (`contain`, `cover` or `stretch`), and `clampFocus()` keeps the zoomed view inside the frame.
 - **Generation:** one zoom effect per eligible click: fully zoomed at the click, held for *duration*, with *transition* easing in and out. A click that lands while the previous effect is still holding extends that effect and switches it to *follow cursor*, so the view pans instead of zooming out and in again. Effects never hold past the end of the recording.
 
@@ -257,17 +263,91 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 | `enabled` | Disabled effects are kept but not applied |
 | `origin`, `sourceEventIds` | `auto` (from these clicks) or `manual`. Editing an automatic effect makes it `manual`, so regenerating never overwrites your edits |
 
-### Editing (editor workspace)
+### Editing
 
-- **Preview** is drawn by the rendering engine (Module 05), exactly as the rendered video will look. *Preview zoom effects* toggles zoom for comparison. With an effect selected, **Adjust framing** shows the whole frame with the zoomed area and lets you drag the focus point (or use the arrow keys).
-- **Timeline** shows each effect's span, with its hold shaded, a tick for every tracked click, and the playhead. Click an effect to edit it, **drag it to move it in time**, or press and drag on the tracks to **scrub**.
-- **Zoom effects** panel: an *enabled* checkbox, plus **Edit**, **Duplicate** and **Delete** (with **Undo**) for each effect, **Add at playhead**, and **Generate from clicks / Regenerate**. Regenerating replaces only unedited automatic effects, after confirmation.
-- **Edit dialog:** time, position (click on the thumbnail or type X/Y %), zoom level, hold, transition, effect, position mode, annotation and enabled. Values are validated and clamped.
-- Every change is saved in one read-modify-write transaction (`updateZoomMarkers`), so edits from two open pages can't overwrite each other.
+Zoom effects are edited in the video editor (see [Video editor](#video-editor-module-06)): on the timeline's *Zoom* lane, in the *Zoom* panel, and in the *Edit* (properties) panel.
+
+## Video editor (Module 06)
+
+```
+┌ toolbar: ← · name (rename, delete) · save status · Undo · Redo · aspect ratio · shortcuts · download · settings · Export ┐
+├ rail ┬ side panel ─────────────────┬ preview (canvas) ─────────────────────────────────────────────────┤
+│Media │ Media: recording, imports   │ the edited timeline, drawn by the rendering engine; drag the     │
+│Text  │ Text: add, list             │ zoom focus (Framing) or a text into place                        │
+│Zoom  │ Zoom: effects, generate     │                                                                  │
+│Cursor│ Cursor: overlays, tracking  │                                                                  │
+│Edit  │ Edit: the selected item     │                                                                  │
+├──────┴─────────────────────────────┴──────────────────────────────────────────────────────────────────┤
+│ control bar: split · delete · text · zoom · + track │ ⏮ ▶ ⏭ timecode │ framing · zoom preview · speed · snap · timeline zoom │
+├──────────────────────────────── drag to resize ───────────────────────────────────────────────────────┤
+│ timeline: ruler · video tracks (with preview frames) · Zoom lane · audio, music and text tracks        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Layout and responsiveness**
+- **Side panel:** the rail picks a panel; picking the open one hides it. Selecting a clip, text or zoom effect on the timeline or in the preview opens **Edit**; clearing the selection goes back to the previous panel. Duplicating, deleting or adding from the Zoom list stays on the list.
+- **Narrow windows (under 1024 px):** the panel floats over the preview instead of taking its width, and starts hidden. Toolbars shrink to icons and scroll sideways rather than wrap. Rail labels hide on short windows.
+- **Timeline height:** drag the line above the timeline (or focus it and use ↑/↓). It is never taller than its tracks, and the preview keeps at least 160 px. The height is remembered in this browser.
+- **Timeline:** video clips show preview frames (decoded with Mediabunny in the background, so long recordings without a seek index work too). The Zoom lane sits right under the video track. Right-click a clip or effect for **Split**, **Duplicate**, **Mute/Unmute**, **Enable/Disable** and **Delete**; the ⋯ on a track header has **Move up/down**, **Lock** and **Remove**.
+
+### Timeline model (`types/project.ts`)
+
+| Item | Fields |
+| --- | --- |
+| `Timeline` | `tracks` (top layer first, so the array order is the layer order), `zoomMarkers` (effects), `durationMs` (end of the last clip) |
+| `TimelineTrack` | `id`, `kind` (`video`, `camera`, `audio`, `music`, `text`), `name`, `clips` (sorted, never overlapping), `hidden`, `muted`, `locked` |
+| `MediaClip` | `id`, `assetId` (reference to a `MediaAsset`), `startMs` (timeline position), `sourceInMs`/`sourceOutMs` (part of the asset shown; duration = out − in), `muted`, `volume` |
+| `TextClip` | `id`, `startMs`, `durationMs`, `text`, `position` (normalised to the frame), `style` (size, colour, background box) |
+
+- **One time unit:** integer milliseconds everywhere.
+- **Source and timeline times stay separate:** moving a clip changes only `startMs`. Trimming its start moves `startMs` and `sourceInMs` together, so the remaining picture is unchanged. Splitting keeps the id on the left part and gives the right part a new id.
+- **Recorded clicks and the pointer path** are in the recording's source time. They are mapped through the screen clips onto the timeline (`timeline/mapping.ts`), so click rings, the cursor highlight, follow-cursor and *Generate from clicks* follow cuts and moves, and disappear where the source was cut out.
+- **Zoom effects** live on the timeline. Moving a video clip carries the effects that start inside it.
+
+### Editing (`services/timeline`, all pure and unit-tested)
+
+- **Select:** click a clip or effect; Shift/Ctrl-click to add to the selection. Clips and effects are buttons, so Tab reaches them and Enter selects. Esc clears the selection.
+- **Move:** drag a clip, also onto another track of a compatible kind. If the spot is taken, it lands in the nearest free spot; a dashed outline shows where (red where there is no room). Effects are dragged on their lane. The keyboard nudges with `,` and `.` (one frame) or with Shift (one second).
+- **Trim:** drag a clip's left or right edge. Trimming stops at the neighbouring clip, at the media's own length, and at 0.1 s. Images can be stretched to any length. Drag an effect's edge to change its hold. The properties panel takes exact start, duration and hold values.
+- **Split:** `S` or the scissors split the selected clips at the playhead, or every clip under the playhead when nothing is selected.
+- **Delete:** `Delete` or `Backspace` removes the selected clips and effects. Locked tracks refuse edits, and the message says why.
+- **Snapping (`N`):** edges snap to clip edges, effect edges, the playhead and 0 within 8 px. Hold Shift while dragging to place freely.
+- **Seek:** click or drag on the time ruler (it snaps too), click empty space on a lane, type a time into the timecode field, or use ←/→ (frame), Shift+←/→ (second), Home and End.
+- **Zoom effects:** effect type, position (drag it with **Adjust framing**, or type it), zoom level, hold, transition speed (slow/normal/fast or exact), position mode, caption and enabled.
+- **Text:** `T` adds text at the playhead on a text track. Edit the words, size, colour and background box; drag the box in the preview or use the arrow keys to place it.
+- **Tracks:** add video, text, music or audio tracks. You can hide (eye), mute, lock, reorder (upper tracks draw on top) and remove a track; removing only works on an empty track.
+- **Media library:** the recording's own files (screen, camera, microphone, tab audio) and **imported** video, audio and image files.
+  - **Import:** files are checked first with Mediabunny (format, codec, length, picture size, sound), so unsupported files are refused with the reason. Imports are stored in IndexedDB with the project and never leave the device.
+  - **Using a file:** **+** places it at the playhead on a free compatible track, adding a track if needed.
+  - **Removing:** an imported file can be removed only when no clip uses it.
+- **Aspect ratio:** original shape, 16:9, 9:16, 1:1 or 4:3. The recording is letterboxed into the frame; zoom and the click overlays stay on the recording's picture, while text and the camera bubble are placed on the whole frame.
+- **Shortcuts:** press `?` or click the keyboard icon. Shortcuts are off while typing in a field or while a dialog is open.
+
+### Undo, redo and autosave (`editor/state/EditorStore.ts`)
+
+- **Undo history:** every edit is one undoable snapshot, labelled ("Undo Split"), up to 100 steps; Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, or the toolbar buttons. Typing in a field or dragging a slider merges into one step. Undo also drops selected items that no longer exist. Export choices are saved but not undoable.
+- **Autosave:** changes are written 0.4 s after the last edit, in one read-modify-write transaction (`saveProjectEdits`). The toolbar shows *Saving…*, *All changes saved*, or *Not saved: reason* with **Retry**. A failed save keeps the edits and retries with the next edit.
+- **Leaving:** pending changes are written when the page is hidden or closed, and the browser asks before leaving while a save is still pending.
+- **Another tab:** if the same project is saved in another tab, a banner offers **Reload** or **Keep editing here** instead of silently overwriting either side.
+- **Reopening:** a reopened project shows every saved edit, with a fresh undo history.
+
+### Preview playback (`services/render/TimelinePlayer.ts`)
+
+- **Playhead:** one clock drives playback. Each track gets one media element, pointed at the clip under the playhead and seeked to that clip's source time; the next clip on a track is loaded 1.5 s ahead, so cuts don't stall.
+- **Staying in sync:** while the bottom video layer plays smoothly, the playhead follows its media time, so zoom stays locked to the picture. Otherwise it follows the wall clock (gaps, images, buffering), and media drifting more than 0.25 s is re-seeked.
+- **Few re-renders:** playback updates go to listeners that move the playhead line and timecode directly. The editor doesn't re-render on playback frames, only on edits, selection and play/pause.
+
+### Export (`renderVideo.ts`)
+
+- **Composition:** each output frame composes the visible layers from the bottom up, plus text and the camera bubble, with `activeVisuals` and `drawFrame`, the same as the preview.
+- **Frames:** each (track, file) pair gets a `FrameCursor` that decodes in order.
+- **Audio:** every audible clip (unmuted track and clip, volume) is mixed at its timeline position with Web Audio `OfflineAudioContext` in 30 s windows, to bound memory, then encoded to Opus.
+- **Size:** the output follows the aspect ratio. The resolution names the short side (1080p portrait is 1080×1920), never above the recording's.
+- **Failures:** media that can't be decoded is left out with a note. The recording itself, if undecodable, stops the export with the reason. An empty timeline is refused.
 
 ## Rendering engine (Module 05)
 
-One rendering service (`src/services/render`) turns a recording and its zoom markers into frames. The editor preview and **Render video** both call it, so the rendered file shows what the preview shows.
+One rendering service (`src/services/render`) turns a recording and its zoom markers into frames. The editor preview and **Export video** both call it, so the rendered file shows what the preview shows. Since Module 06 it composes the whole edited timeline (see [Video editor](#video-editor-module-06)); the zoom model below is unchanged.
 
 ```
                        frameStateAt(scene, t)          (pure: camera + overlays at media time t)
@@ -287,12 +367,12 @@ One rendering service (`src/services/render`) turns a recording and its zoom mar
 - **Synchronization:** effects are evaluated at the **media time** of the frame being drawn (`video.currentTime` in the preview, the output frame timestamp in the render), never at wall-clock time. That covers seeking, pausing, scrubbing and the 0.5×–2× speed control. While playing, the preview redraws every animation frame, so zoom animates even when the recording holds a still frame. While paused nothing runs; it redraws only when the time, the scene or the canvas size changes.
 - **Render video** (`renderVideo.ts`, loaded only when used):
   - **Pipeline:** WebCodecs through [Mediabunny](https://github.com/Vanilagy/mediabunny) (MPL-2.0). It decodes the screen video in order, draws each output frame at a constant 30 or 60 fps from the latest source frame, encodes VP9 (VP8 or AV1 as fallbacks) and writes WebM.
-  - **Audio:** packets are copied unchanged with their original timestamps, so audio stays exactly as in the original. If the codec can't go into WebM it is re-encoded to Opus. Without a usable audio track, the result says it has no sound.
+  - **Audio:** since Module 06 every audible clip is mixed at its timeline position and volume, then encoded to Opus (see below). Without a usable audio track, the result says it has no sound.
   - **Choices:** resolution (never above the recording's), frame rate, quality, and whether to include the camera bubble. They're saved in the project's export settings.
   - **Result:** shown with a player, size and details before you download it. You can cancel at any time; leaving the page while rendering asks first.
   - **Memory:** each decoded frame is released right after it is drawn.
 - **Graceful failures:** a file that can't be read, or a video codec this browser can't decode, stops with a message naming the problem. If the encoder rejects the requested size (e.g. 4K on some GPUs), rendering steps down to 1440p, 1080p or 720p and says so in the result. A camera track that can't be decoded is left out, with a note.
-- **Why sequential decoding:** a still screen gives the recorder few reasons for keyframes, so a MediaRecorder file can hold a single keyframe for minutes, and it has no cue index. Seeking into such files for every output frame proved unreliable (frames came back empty after the first second), so the render decodes the file once, in order, and holds frames (`heldFrames`).
+- **Why sequential decoding:** a still screen gives the recorder few reasons for keyframes, so a MediaRecorder file can hold a single keyframe for minutes, and it has no cue index. Seeking into such files for every output frame proved unreliable (frames came back empty after the first second), so the render decodes each file in order and holds frames (`FrameCursor`, which restarts from the beginning only when a later clip shows earlier source).
 
 ## Folder structure
 
@@ -301,8 +381,9 @@ ZoomCapture/
 ├── package.json, tsconfig.json, vite.config.ts, vite.content.config.ts, vitest.config.ts, .gitignore
 ├── tests/
 │   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors,
-│   │                           # zoomCoordinates, clickTracking, zoomMarkers, render, renderVideo
-│   └── e2e/{run,lib,module04,module05}.mjs   # Puppeteer + Chrome for Testing against dist/
+│   │                           # zoomCoordinates, clickTracking, zoomMarkers, render, renderVideo,
+│   │                           # timeline, editorStore
+│   └── e2e/{run,lib,module04,module05,module06}.mjs   # Puppeteer + Chrome for Testing against dist/
 ├── public/                     # copied verbatim into dist/
 │   ├── manifest.json           # Manifest V3
 │   └── icons/icon-{16,32,48,128}.png
@@ -324,10 +405,13 @@ ZoomCapture/
     │   ├── components/{SourcePreview,RecordingControls,CameraBubble,FloatingControls,
     │   │               RecordingResult,SavingProgress,ClickTrackingPanel,DevicePanels,MicLevelMeter,StreamVideo}.tsx
     │   └── hooks/{useRecordingFlow,useDisplayCapture,useClickTracking,useUserMediaStream,useDocumentPip,useStudioCommands}.ts
-    ├── editor/                 # recording library + recording workspace
+    ├── editor/                 # recording library + video editor
     │   ├── EditorPage.tsx      # ?recording=<id> (older ?project=<id> links still work)
-    │   └── components/{RecordingLibrary,RecordingWorkspace,TimelineView,ZoomPreview,ZoomEffectsPanel,
-    │                       ZoomMarkerDialog,RenderEffectsPanel,RenderVideoDialog,RecoverableRecordings,EditorHeader}.tsx
+    │   ├── components/{RecordingLibrary,RecordingWorkspace,ZoomEffectsPanel,RenderVideoDialog,
+    │   │               RecoverableRecordings,EditorHeader}.tsx
+    │   ├── state/{EditorStore,EditorContext}   # undo/redo, autosave, selection; playhead hooks
+    │   └── workspace/{EditorWorkspace,PreviewPane,TimelinePanel,PropertiesPanel,MediaSidebar,
+    │                  FramingOverlay,fields}.tsx, useTimelineActions, useEditorShortcuts, useAssetUrls
     ├── settings/{SettingsPage,AutoZoomSettingsPanel}.tsx   # options page
     ├── shared/
     │   ├── components/         # Button, IconButton, Toggle, Tooltip, Dialog/ConfirmDialog,
@@ -340,10 +424,11 @@ ZoomCapture/
     │   └── mountPage.tsx       # root render + providers
     ├── services/
     │   ├── messaging.ts, settings.ts, sessionState.ts, navigation.ts
-    │   ├── media/{displayCapture,tabCapture,userMedia,audioLevel,thumbnail}.ts
+    │   ├── media/{displayCapture,tabCapture,userMedia,audioLevel,thumbnail,probe}.ts
     │   ├── zoom/               # coordinates, clicks (filter + dedupe, pointer batches), support (per source), markers
-    │   ├── render/             # camera, paths (pointer, smoothing), frameState, draw, output,
-    │   │                       # PreviewRenderer (editor canvas), renderVideo (WebCodecs export)
+    │   ├── render/             # camera, paths (pointer, smoothing), frameState, draw, output, compose,
+    │   │                       # TimelinePlayer (editor preview), renderVideo (WebCodecs export)
+    │   ├── timeline/           # model, operations (move/trim/split/…), snapping, mapping, history
     │   ├── recording/          # RecordingController, TrackRecorder, RecordingClock, audioMixer,
     │   │                       # mimeTypes, webmDuration, finalizeRecording
     │   ├── export/             # Exporter interface, original-file exporter, download helper
@@ -425,7 +510,7 @@ Use real devices, because Chrome's `--use-fake-device-for-media-stream` camera c
 - [ ] Choosing a device that is unplugged falls back to the system default with "Selected device unavailable — using default".
 - [ ] Denying camera or microphone permission shows a clear error with **Try again**, and you can still record without that device.
 - [ ] Drag the camera bubble (or move it with the arrow keys) and pick a size. The editor shows the camera at the same spot and size, and in sync.
-- [ ] The floating window appears on Start, can be moved over other apps, and shows the camera bubble and controls.
+- [ ] The floating window appears on Start, is small, can be moved over other apps, and shows the countdown. It closes when recording starts and isn't in the saved video. With *Hide it while recording* off, it stays open with the camera bubble and controls.
 - [ ] Muting the microphone during recording records silence: the meter goes flat, and the timeline stays aligned. Hiding the camera records black frames.
 - [ ] Camera and microphone cannot be newly enabled during a recording, and the controls say so.
 
@@ -494,7 +579,8 @@ Automated: `npm test` (79 unit tests) and `npm run test:e2e` (14 end-to-end test
 - [ ] Optional: **Always allow on <site>** asks for that one site only. Afterwards, leaving and returning to it keeps tracking without clicking the icon.
 
 **Unsupported sources (fallback)**
-- [ ] Record the **entire screen**, a **window**, and a tab chosen with **Choose another tab**. The studio says "Clicks are not tracked" with the matching reason. The saved recording has no automatic effects, and the editor says clicks weren't tracked and offers **Add at playhead**.
+- [ ] Record a **window**, and a tab chosen with **Choose another tab**. The studio says "Clicks are not tracked" with the matching reason. The saved recording has no automatic effects, and the editor says clicks weren't tracked and offers **Add at playhead**.
+- [ ] Record the **entire screen**: the studio asks to **Allow click tracking**. Allow it, then click around in a few Chrome tabs (and once in another app). The recording has zoom effects at the Chrome clicks only, at the right places, and the editor's Zoom panel says "N clicks tracked in Chrome tabs". Record the screen again without allowing: no clicks, with the reason.
 - [ ] Open the popup on `chrome://extensions`, choose Browser Tab. It explains that clicks can't be tracked on that page.
 
 **Settings**
@@ -535,3 +621,37 @@ Automated: `npm test` (113 unit tests) and `npm run test:e2e` (17 end-to-end tes
 - [ ] Render a high-resolution recording (e.g. a 4K screen). Either it renders at full size, or the result says which smaller size was used.
 - [ ] **Cancel rendering** stops it. Closing the tab while rendering asks for confirmation first.
 - [ ] **Download original** still saves the untouched recording, and the library preview still plays it.
+
+---
+
+## Module 06 test checklist
+
+Automated: `npm test` (154 unit tests) and `npm run test:e2e` (end-to-end, see Tests). Manual checks on a real device:
+
+**Layout and data**
+- [ ] Open a recording. The rail and side panel (left), preview, control bar, timeline (bottom) and toolbar (top) are shown, with one clip per recorded track (screen, microphone, tab audio, camera) and preview frames on the video clip.
+- [ ] Make the window narrow (about 900 px) and short (about 600 px): nothing overflows sideways, the panel floats over the preview, and dragging the line above the timeline resizes it.
+- [ ] Open a recording made before this version. It opens with its zoom effects, and nothing is lost.
+
+**Timeline**
+- [ ] Click and drag on the time ruler: the preview follows. Play: the playhead line moves smoothly, and the timeline scrolls along.
+- [ ] Split the screen clip twice (`S`), select the middle part and press Delete. Playback jumps over the cut without a stall, and the click rings and zoom follow the content.
+- [ ] Drag a clip later, and onto another compatible track. It never overlaps another clip, and the preview shows the moved content at its new time.
+- [ ] Drag a clip's edges to trim. A clip can't be stretched past its media; an image can.
+- [ ] With snapping on, edges stick to other edges and the playhead. Shift + drag places freely. `N` toggles snapping.
+- [ ] Zoom effects: drag one to move it, drag its edge to change the hold, and edit zoom level, position (Adjust framing), hold and transition speed in the properties panel.
+- [ ] Hide, mute, lock and reorder tracks. A locked track refuses edits with a message, and a hidden video track disappears from the preview.
+
+**Text, media and aspect ratio**
+- [ ] `T` adds text. Edit it in the properties panel, drag it in the preview, and change its size and colour.
+- [ ] Import an MP4, an MP3 and a PNG; add each with **+**. A file in an unsupported format is refused with the reason. A used file can't be removed; once unused, it can.
+- [ ] Switch the aspect ratio to 9:16 and 1:1. The preview reshapes with the recording letterboxed, and the export matches.
+
+**Undo, autosave and safety**
+- [ ] Make several edits and undo/redo them all with Ctrl+Z / Ctrl+Shift+Z and the toolbar. The undo button names the action.
+- [ ] The toolbar shows "Saving…", then "All changes saved". Reload or reopen the browser: every edit is there.
+- [ ] Close the tab right after an edit: Chrome asks first. Edit the same project in two tabs: the second one shows "changed in another tab".
+- [ ] Every action works with the keyboard (Tab to clips, Enter to select, `,` / `.` to nudge, `?` for the list).
+
+**Export**
+- [ ] **Export video** renders the edited timeline: cuts, moved clips, text, imported media and zoom, with the audio of every audible clip in sync and muted tracks silent.

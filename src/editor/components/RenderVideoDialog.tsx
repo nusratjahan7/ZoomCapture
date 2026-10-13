@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Download, Film } from 'lucide-react';
 import { downloadBlob } from '@/services/export/download';
 import type { RenderProgress, RenderResult, RenderSettings } from '@/services/render/renderVideo';
-import { outputSize, RESOLUTION_HEIGHT } from '@/services/render/output';
+import { frameSize } from '@/services/render/compose';
+import { RESOLUTION_HEIGHT } from '@/services/render/output';
 import { getAssetBlob } from '@/services/storage/assetRepository';
 import { Button, Dialog, ProgressBar, SegmentedControl, Select, Toggle } from '@/shared/components';
 import type { ExportSettings, MediaAsset, Project, Recording } from '@/types';
@@ -39,7 +40,7 @@ export function RenderVideoDialog({
   onClose: () => void;
   recording: Recording;
   project: Project;
-  assets: MediaAsset[];
+  assets: readonly MediaAsset[];
   onSettingsChange: (settings: ExportSettings) => void;
 }) {
   const [phase, setPhase] = useState<Phase>({ name: 'setup' });
@@ -49,8 +50,9 @@ export function RenderVideoDialog({
   const hasCamera = Boolean(project.cameraLayout && assets.some((asset) => asset.kind === 'camera' && asset.origin === 'recording'));
   const source = { width: recording.width ?? 1920, height: recording.height ?? 1080 };
   // Only sizes up to the recording's own (rendering never upscales).
-  const resolutions = RESOLUTIONS.filter((option) => option.value === 'source' || RESOLUTION_HEIGHT[option.value] < source.height);
-  const size = outputSize(source, settings.resolution);
+  // Only sizes up to the recording's own; the resolution names the short side of the output.
+  const resolutions = RESOLUTIONS.filter((option) => option.value === 'source' || RESOLUTION_HEIGHT[option.value] < Math.min(source.width, source.height));
+  const size = frameSize(source, project.aspectRatio, settings.resolution);
 
   const releaseUrl = () => {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -87,21 +89,22 @@ export function RenderVideoDialog({
     releaseUrl();
     setPhase({ name: 'rendering', progress: null });
     try {
-      const cameraAsset = assets.find((asset) => asset.kind === 'camera' && asset.origin === 'recording');
-      const [screen, camera, { renderRecording }] = await Promise.all([
-        getAssetBlob(recording.screenAssetId),
-        settings.includeCamera && hasCamera && cameraAsset ? getAssetBlob(cameraAsset.id) : Promise.resolve(undefined),
+      // The bytes of every asset used on the timeline (read lazily from IndexedDB-backed blobs).
+      const used = new Set(project.timeline.tracks.flatMap((track) => track.clips.flatMap((clip) => (clip.type === 'media' ? [clip.assetId] : []))));
+      const [entries, { renderProject }] = await Promise.all([
+        Promise.all([...used].map(async (id) => [id, await getAssetBlob(id)] as const)),
         // Loaded on demand: the encoder library is only needed when rendering.
         import('@/services/render/renderVideo'),
       ]);
-      if (!screen) throw new Error('The recording file is missing from local storage.');
+      const blobs = new Map(entries.flatMap(([id, blob]) => (blob ? [[id, blob] as const] : [])));
+      if (used.has(recording.screenAssetId) && !blobs.has(recording.screenAssetId)) throw new Error('The recording file is missing from local storage.');
       const renderSettings: RenderSettings = {
         resolution: settings.resolution,
         frameRate: settings.frameRate,
         quality: settings.quality,
         includeCamera: settings.includeCamera && hasCamera,
       };
-      const result = await renderRecording({ recording, project, assets, screen, camera }, renderSettings, {
+      const result = await renderProject({ recording, project, assets, blobs }, renderSettings, {
         signal: controller.signal,
         onProgress: (progress) => {
           if (!controller.signal.aborted) setPhase({ name: 'rendering', progress });
@@ -126,8 +129,8 @@ export function RenderVideoDialog({
       open={open}
       onClose={close}
       size={phase.name === 'done' ? 'lg' : 'md'}
-      title="Render video with zoom"
-      description="Creates a new WebM video with your zoom effects and overlays, exactly as in the preview. The original recording is not changed."
+      title="Export video"
+      description="Renders the edited timeline (cuts, layers, text, zoom effects and audio) into a new WebM video, exactly as in the preview. The original recording is not changed."
       footer={
         phase.name === 'setup' || phase.name === 'error' ? (
           <>
@@ -224,7 +227,7 @@ export function RenderVideoDialog({
           <p className="text-sm text-fg-muted" data-testid="render-summary">
             {phase.result.width}×{phase.result.height} · {phase.result.frameRate} fps · {formatDuration(phase.result.durationSeconds * 1000)} ·{' '}
             {phase.result.videoCodec.toUpperCase()} ·{' '}
-            {phase.result.audio === 'none' ? 'no audio' : phase.result.audio === 'copied' ? 'original audio' : 'audio re-encoded'} ·{' '}
+            {phase.result.audio === 'none' ? 'no audio' : 'audio mixed'} ·{' '}
             {formatBytes(phase.result.blob.size)}
           </p>
           {phase.result.warnings.map((warning) => (

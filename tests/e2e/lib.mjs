@@ -1,8 +1,10 @@
-// Helpers for the end-to-end suite: launching Chrome for Testing with the built extension and
+// Helpers for the end-to-end suite: launching Chrome (for Testing, or CHROME_PATH) with the built extension and
 // driving its pages. Chrome's fake media devices stand in for a real screen and microphone.
 import { getInstalledBrowsers, Browser } from '@puppeteer/browsers';
 import puppeteer from 'puppeteer-core';
-import { resolve } from 'node:path';
+import { cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 export const ROOT = resolve(import.meta.dirname, '..', '..');
 export const DIST = resolve(ROOT, 'dist');
@@ -18,17 +20,31 @@ export async function findChrome() {
 }
 
 /**
+ * A copy of the built extension with access to websites already granted: stands in for the user
+ * accepting Chrome's permission prompt (browser UI that automation can't click).
+ */
+export function extensionWithSiteAccess() {
+  const copy = mkdtempSync(join(tmpdir(), 'zc-ext-'));
+  cpSync(DIST, copy, { recursive: true });
+  const manifestPath = join(copy, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.host_permissions = [...(manifest.host_permissions ?? []), ...manifest.optional_host_permissions];
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  return copy;
+}
+
+/**
  * Branded Chrome no longer loads unpacked extensions from the command line, so Chrome for Testing
  * is used. The same `userDataDir` across launches simulates closing and reopening the browser.
  */
-export async function launch(userDataDir, { fakeMedia = true } = {}) {
+export async function launch(userDataDir, { fakeMedia = true, extensionPath = DIST } = {}) {
   const browser = await puppeteer.launch({
     executablePath: await findChrome(),
     headless: true,
     pipe: true,
     userDataDir,
     protocolTimeout: 60_000,
-    enableExtensions: [DIST],
+    enableExtensions: [extensionPath],
     // Fake devices stand in for the screen picker, camera and microphone. They also hijack
     // chromeMediaSource 'tab' streams, so direct tab capture runs without them.
     args: fakeMedia
@@ -161,4 +177,42 @@ export async function recordClip(env, { seconds = 3, beforeStop } = {}) {
   });
   await (await button(studio, 'Stop')).click();
   return studio;
+}
+
+// ── Editor helpers (Module 06 editor UI) ─────────────────────────────────────────
+
+/** Moves the editor's playhead by typing into the timecode field, then waits for the frame. */
+export async function seekEditor(page, ms) {
+  const input = await page.waitForSelector('input[data-testid=playhead]');
+  await input.click();
+  await input.evaluate((element) => element.select());
+  const seconds = ms / 1000;
+  await input.type(`${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(3)}`);
+  await input.press('Enter');
+  await page.waitForFunction(
+    (target) => Math.abs(Number(document.querySelector('[data-testid=zoom-canvas]').dataset.time) - target) <= 1,
+    { polling: 50, timeout: 10_000 },
+    Math.round(ms),
+  );
+}
+
+/** Opens a side panel from the editor's icon rail (Media, Text, Zoom, Cursor, Edit), unless already open. */
+export async function openPanel(page, label) {
+  const tab = await page.waitForSelector(`xpath/.//nav[@aria-label="Editor panels"]//button[@role="tab"][contains(., "${label}")]`);
+  if ((await tab.evaluate((element) => element.getAttribute('aria-selected'))) !== 'true') await tab.click();
+}
+
+/** Shows the zoom effects list. */
+export const openEffectsTab = (page) => openPanel(page, 'Zoom');
+
+/** Waits until the editor has written every change to IndexedDB. */
+export const waitSaved = (page) => waitForText(page, 'All changes saved');
+
+/** Sets a range input's value the way a user drag does (fires React's onChange). */
+export async function setRange(handle, value) {
+  await handle.evaluate((input, v) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, String(v));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, value);
 }

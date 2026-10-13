@@ -394,7 +394,7 @@ describe('drawing a frame', () => {
     const ctx = mockContext();
     const state = frameStateAt(scene([marker(1000, { x: 0.5, y: 0.5 })]), 2000);
     const image = {} as CanvasImageSource;
-    drawFrame(ctx, 1280, 720, { screen: { image, width: 1920, height: 1080 } }, state);
+    drawFrame(ctx, 1280, 720, { layers: [{ image, width: 1920, height: 1080 }] }, state);
     const draws = ctx.calls.filter(([name]) => name === 'drawImage');
     expect(draws).toEqual([['drawImage', [image, 480, 270, 960, 540, 0, 0, 1280, 720]]]);
   });
@@ -402,11 +402,11 @@ describe('drawing a frame', () => {
   it('draws the camera bubble only when a camera frame and layout are given', () => {
     const state = frameStateAt(scene([]), 0);
     const without = mockContext();
-    drawFrame(without, 1280, 720, { screen: null }, state);
+    drawFrame(without, 1280, 720, { layers: [] }, state);
     expect(without.calls.some(([name]) => name === 'drawImage')).toBe(false);
     const withCamera = mockContext();
     const camera = {} as CanvasImageSource;
-    drawFrame(withCamera, 1280, 720, { screen: null, camera: { image: camera, width: 640, height: 480 }, cameraLayout: { x: 0.9, y: 0.85, size: 'medium' } }, state);
+    drawFrame(withCamera, 1280, 720, { layers: [], camera: { image: camera, width: 640, height: 480 }, cameraLayout: { x: 0.9, y: 0.85, size: 'medium' } }, state);
     const draw = withCamera.calls.find(([name]) => name === 'drawImage')!;
     // Centre-cropped square from the 640×480 camera frame, 20 % of the output width.
     expect(draw[1]).toEqual([camera, 80, 0, 480, 480, -128, -128, 256, 256]);
@@ -423,7 +423,7 @@ describe('drawing a frame', () => {
       }),
       2000,
     );
-    drawFrame(new Proxy(ctx, { get: (target, key) => (key === 'arc' ? arc : target[key as keyof typeof target]) }), 1000, 500, { screen: null }, state);
+    drawFrame(new Proxy(ctx, { get: (target, key) => (key === 'arc' ? arc : target[key as keyof typeof target]) }), 1000, 500, { layers: [] }, state);
     // Ripple at the centre (the zoomed click), cursor 0.75 → 1.0 at 2× (right edge).
     expect(arc.mock.calls.map((call) => [call[0], call[1]])).toEqual([
       [500, 250],

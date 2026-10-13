@@ -80,3 +80,11 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Scrollable toolbars on narrow windows, without a visible scrollbar. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}

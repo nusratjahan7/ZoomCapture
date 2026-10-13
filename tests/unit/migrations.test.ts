@@ -20,7 +20,8 @@ async function createV2Database() {
   });
   const timeline = {
     durationMs: 9000,
-    tracks: [],
+    // A pre-v5 clip (no `type`), as written by Modules 02-05.
+    tracks: [{ id: 'tl_1', kind: 'video', name: 'Screen', clips: [{ id: 'clp_1', assetId: 'ast_screen', startMs: 0, sourceInMs: 0, sourceOutMs: 9000 }] }],
     // A v2-era marker shape (start/end/focus), upgraded by the v4 step.
     zoomMarkers: [{ id: 'zm_old', startMs: 1000, endMs: 4000, scale: 2, focus: { x: 0.25, y: 0.75 }, easing: 'ease-in-out', origin: 'manual' }],
   };
@@ -91,7 +92,12 @@ describe('IndexedDB migrations', () => {
     expect(recording!.clickTracking.mode).toBe('unsupported');
 
     const project = (await getProject('prj_v2'))!;
-    expect(project).toMatchObject({ recordingId: recording!.id, schemaVersion: 2, subtitles: [], importedAssetIds: [] });
+    expect(project).toMatchObject({ recordingId: recording!.id, schemaVersion: 3, subtitles: [], importedAssetIds: [] });
+    // v5: every clip is a typed media clip; the project keeps the recording's shape.
+    expect(project.aspectRatio).toBe('source');
+    const clips = project.timeline.tracks.flatMap((track) => track.clips);
+    expect(clips.length).toBeGreaterThan(0);
+    expect(clips.every((clip) => clip.type === 'media')).toBe(true);
     expect('interactions' in project).toBe(false);
     expect(project.zoom).toMatchObject({ durationMs: 2500, transitionMs: 600 });
     expect(project.timeline.zoomMarkers).toEqual([

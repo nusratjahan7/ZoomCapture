@@ -15,6 +15,11 @@ import type { ViewportRect } from '@/services/zoom/coordinates';
 interface TrackerConfig {
   sessionId: string;
   recording: boolean;
+  /**
+   * `tab`: this tab is the recording (positions relative to its viewport). `screen`: the entire
+   * screen is recorded (positions relative to the screen this window is on).
+   */
+  scope?: 'tab' | 'screen';
 }
 
 interface Tracker {
@@ -47,7 +52,23 @@ function captureViewport(): ViewportRect {
   return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
 }
 
-function createIndicator(): HTMLElement {
+/**
+ * The screen this window is on, in the same units as `MouseEvent.screenX/Y`. Chrome reports the
+ * origin of the available area (`availLeft/availTop`), which matches the screen's origin unless
+ * the taskbar is on its left or top edge.
+ */
+function screenRect(): ViewportRect {
+  const display = screen as Screen & { availLeft?: number; availTop?: number };
+  return { left: display.availLeft ?? 0, top: display.availTop ?? 0, width: display.width, height: display.height };
+}
+
+/** A pointer position in the captured area's coordinates, plus that area. */
+function locate(event: PointerEvent, scope: TrackerConfig['scope']): { x: number; y: number; area: ViewportRect } {
+  if (scope === 'screen') return { x: event.screenX, y: event.screenY, area: screenRect() };
+  return { x: event.clientX, y: event.clientY, area: captureViewport() };
+}
+
+function createIndicator(scope: TrackerConfig['scope']): HTMLElement {
   const host = document.createElement('zoomcapture-indicator');
   host.style.cssText = 'all: initial; position: fixed; right: 16px; bottom: 16px; z-index: 2147483647;';
   const shadow = host.attachShadow({ mode: 'closed' });
@@ -59,7 +80,7 @@ function createIndicator(): HTMLElement {
       span.dot { width: 8px; height: 8px; border-radius: 50%; background: #22d3ee; margin-top: 4px; flex: none; }
       small { display: block; color: #a3a9bb; margin-top: 2px; }
     </style>
-    <div role="status"><span class="dot"></span><span>ZoomCapture is tracking clicks in this tab for automatic zoom.
+    <div role="status"><span class="dot"></span><span>${scope === 'screen' ? 'ZoomCapture is tracking clicks in Chrome tabs for your screen recording.' : 'ZoomCapture is tracking clicks in this tab for automatic zoom.'}
       <small>Only pointer positions and clicks are recorded, while recording. This notice is hidden while recording.</small></span></div>`;
   return host;
 }
@@ -82,7 +103,8 @@ function createTracker(): Tracker {
 
   const flush = () => {
     if (!config || pending.length === 0) return;
-    send({ channel: 'tracker', type: 'pointer', sessionId: config.sessionId, batch: { viewport: captureViewport(), samples: pending } });
+    const area = config.scope === 'screen' ? screenRect() : captureViewport();
+    send({ channel: 'tracker', type: 'pointer', sessionId: config.sessionId, batch: { viewport: area, samples: pending } });
     pending = [];
   };
 
@@ -90,7 +112,8 @@ function createTracker(): Tracker {
     if (!config?.recording || !event.isPrimary) return;
     if (!force && event.timeStamp - lastSampleAt < SAMPLE_INTERVAL_MS) return;
     lastSampleAt = event.timeStamp;
-    pending.push({ epochMs: performance.timeOrigin + event.timeStamp, clientX: event.clientX, clientY: event.clientY, hidden: hidden || undefined });
+    const point = locate(event, config.scope);
+    pending.push({ epochMs: performance.timeOrigin + event.timeStamp, clientX: point.x, clientY: point.y, hidden: hidden || undefined });
   };
 
   const onPointerMove = (event: PointerEvent) => addSample(event);
@@ -102,17 +125,18 @@ function createTracker(): Tracker {
   const onPointerDown = (event: PointerEvent) => {
     if (!config || !event.isPrimary) return;
     addSample(event, false, true);
+    const point = locate(event, config.scope);
     send({
       channel: 'tracker',
       type: 'click',
       sessionId: config.sessionId,
       click: {
         epochMs: performance.timeOrigin + event.timeStamp,
-        clientX: event.clientX,
-        clientY: event.clientY,
+        clientX: point.x,
+        clientY: point.y,
         // Touch and pen report button 0 for the primary contact as well.
         button: event.button < 0 ? 0 : event.button,
-        viewport: captureViewport(),
+        viewport: point.area,
         trusted: event.isTrusted,
       },
     });
@@ -155,7 +179,7 @@ function createTracker(): Tracker {
         flushTimer = 0;
       }
       if (!active && !indicator) {
-        indicator = createIndicator();
+        indicator = createIndicator(config?.scope);
         document.documentElement.append(indicator);
       }
     },
