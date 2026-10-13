@@ -111,8 +111,12 @@ export function TimelinePanel() {
     ghostRef.current = next;
     setGhostState(next);
   };
+  /** The one scroll area (both directions); track headers stick to its left, the ruler to its top. */
   const scrollRef = useRef<HTMLDivElement>(null);
+  const headersRef = useRef<HTMLDivElement>(null);
   const lanesRef = useRef<HTMLDivElement>(null);
+  /** Width of the lanes that is visible (the scroll area minus the sticky headers). */
+  const visibleLaneWidth = () => (scrollRef.current?.clientWidth ?? 800) - (headersRef.current?.offsetWidth ?? 0);
   const playheadRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const assetMap = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
@@ -121,7 +125,7 @@ export function TimelinePanel() {
   // Fit the whole timeline on first show.
   const duration = Math.max(timeline.durationMs, 1000);
   const fitScale = useCallback(() => {
-    const width = (scrollRef.current?.clientWidth ?? 800) - 32;
+    const width = visibleLaneWidth() - 32;
     return Math.min(MAX_PX_PER_SECOND, Math.max(MIN_PX_PER_SECOND, (width / duration) * 1000));
   }, [duration]);
   useEffect(() => {
@@ -142,7 +146,7 @@ export function TimelinePanel() {
     const scroller = scrollRef.current;
     if (playing && scroller) {
       const position = x(timeMs);
-      if (position > scroller.scrollLeft + scroller.clientWidth - 40 || position < scroller.scrollLeft) scroller.scrollLeft = Math.max(0, position - 40);
+      if (position > scroller.scrollLeft + visibleLaneWidth() - 40 || position < scroller.scrollLeft) scroller.scrollLeft = Math.max(0, position - 40);
     }
   }, player);
   useEffect(() => {
@@ -334,139 +338,141 @@ export function TimelinePanel() {
       {!hasLanes ? (
         <p className="m-auto p-6 text-center text-sm text-fg-subtle">The timeline is empty. Add media from the Media panel, or add a text with T.</p>
       ) : (
-        <div className="flex min-h-0 flex-1 overflow-y-auto" onKeyDown={(event) => event.key === 'Escape' && cancelDrag()}>
-          {/* Track headers */}
-          <div className="z-20 w-28 shrink-0 border-r border-line bg-surface sm:w-44">
-            <div className="sticky top-0 z-10 border-b border-line bg-surface" style={{ height: RULER_HEIGHT }} />
-            {rows.map((row, position) =>
-              row.type === 'zoom' ? (
-                <div key="zoom" className="flex items-center gap-1.5 border-b border-line px-2 text-[11px] text-fg-muted" style={{ height: rowHeight(row) }}>
-                  <ZoomIn size={13} aria-hidden className="shrink-0 text-accent" /> <span className="truncate">Zoom</span>
-                </div>
-              ) : (
-                <TrackHeader
-                  key={row.track.id}
-                  track={row.track}
-                  height={rowHeight(row)}
-                  first={row.index === 0}
-                  last={row.index === timeline.tracks.length - 1}
-                  onMenu={(rect, items) => setMenu({ x: rect.left, y: rect.bottom, items, label: `${row.track.name} track` })}
-                  data-row={position}
-                />
-              ),
-            )}
-          </div>
-
-          {/* Lanes */}
-          <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden">
-            <div ref={lanesRef} className="relative" style={{ width }}>
-              <div
-                className="sticky top-0 z-10 cursor-ew-resize touch-none border-b border-line bg-surface select-none"
-                style={{ height: RULER_HEIGHT }}
-                role="slider"
-                tabIndex={0}
-                aria-label="Time ruler: click or drag to move the playhead"
-                aria-valuemin={0}
-                aria-valuemax={Math.round(timeline.durationMs)}
-                aria-valuenow={Math.round(player?.time ?? 0)}
-                data-testid="time-ruler"
-                data-px-per-ms={scale}
-                onPointerDown={(event) => {
-                  scrubbing.current = true;
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  scrub(event);
-                }}
-                onPointerMove={(event) => scrubbing.current && scrub(event)}
-                onPointerUp={() => (scrubbing.current = false)}
-                onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-                  if (!player) return;
-                  const step = event.shiftKey ? 1000 : 100;
-                  if (event.key === 'ArrowLeft') player.seek(player.time - step);
-                  else if (event.key === 'ArrowRight') player.seek(player.time + step);
-                  else return;
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-              >
-                {ticks.map((tick) => (
-                  <span key={tick.ms} className="absolute bottom-0 h-full pl-1 text-[10px] leading-7 text-fg-subtle" style={{ left: x(tick.ms) }}>
-                    <span aria-hidden className="absolute bottom-0 left-0 h-2 w-px bg-line-strong" />
-                    {tick.label}
-                  </span>
-                ))}
-              </div>
-
-              {rows.map((row) =>
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" onKeyDown={(event) => event.key === 'Escape' && cancelDrag()}>
+          <div className="flex w-max min-w-full">
+            {/* Track headers: stay on the left while scrolling sideways. */}
+            <div ref={headersRef} className="sticky left-0 z-30 w-28 shrink-0 border-r border-line bg-surface sm:w-44">
+              <div className="sticky top-0 z-10 border-b border-line bg-surface" style={{ height: RULER_HEIGHT }} />
+              {rows.map((row, position) =>
                 row.type === 'zoom' ? (
-                  <Lane key="zoom" label="Zoom effects" testId="zoom-track" height={rowHeight(row)} onBackground={onBackground}>
-                    {timeline.zoomMarkers.length === 0 && (
-                      <span aria-hidden className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-[11px] text-fg-subtle">
-                        No zoom effects. Press Z to add one at the playhead.
-                      </span>
-                    )}
-                    {timeline.zoomMarkers.map((marker) => (
-                      <MarkerBlock
-                        key={marker.id}
-                        marker={applyMarkerGhost(marker, ghost)}
-                        selected={selection.includes(marker.id)}
-                        x={x}
-                        onBodyDown={(event) => begin(event, { kind: 'marker-move', id: marker.id, originMs: marker.timeMs })}
-                        onHoldDown={(event) => begin(event, { kind: 'marker-hold', id: marker.id, originMs: marker.durationMs })}
-                        onMove={onDragMove}
-                        onUp={onDragEnd}
-                        onKeySelect={(additive) => select(marker.id, additive)}
-                        onContextMenu={(event) => openMenu(event, marker.id, () => markerMenu(marker), 'Zoom effect')}
-                      />
-                    ))}
-                  </Lane>
+                  <div key="zoom" className="flex items-center gap-1.5 border-b border-line px-2 text-[11px] text-fg-muted" style={{ height: rowHeight(row) }}>
+                    <ZoomIn size={13} aria-hidden className="shrink-0 text-accent" /> <span className="truncate">Zoom</span>
+                  </div>
                 ) : (
-                  <Lane
+                  <TrackHeader
                     key={row.track.id}
-                    label={`${row.track.name} track`}
-                    trackId={row.track.id}
+                    track={row.track}
                     height={rowHeight(row)}
-                    dim={row.track.hidden || row.track.muted}
-                    highlight={ghost?.kind === 'clip' && ghost.trackId === row.track.id}
-                    onBackground={onBackground}
-                  >
-                    {row.track.clips.map((clip) => {
-                      const track = row.track;
-                      if (ghost?.kind === 'clip' && ghost.id === clip.id && ghost.trackId !== track.id) return null;
-                      const span = displayClip(clip);
-                      const asset = isMediaClip(clip) ? assetMap.get(clip.assetId) : undefined;
-                      const strip = asset ? filmstrips.get(asset.id) : undefined;
-                      return (
-                        <ClipBlock
-                          key={clip.id}
-                          label={clipLabel(clip, asset)}
-                          clip={clip}
-                          kind={track.kind}
-                          missing={isMediaClip(clip) && !asset}
-                          selected={selection.includes(clip.id)}
-                          invalid={ghost?.kind === 'clip' && ghost.id === clip.id && !ghost.valid}
-                          locked={Boolean(track.locked)}
-                          left={x(span.startMs)}
-                          width={Math.max(4, x(span.endMs - span.startMs))}
-                          height={rowHeight(row) - 8}
-                          filmstrip={strip && isMediaClip(clip) ? { strip, sourceStartMs: clip.sourceInMs + (span.startMs - clip.startMs), msPerPx: 1 / scale } : undefined}
-                          onBodyDown={(event) => begin(event, { kind: 'move', id: clip.id, originMs: clip.startMs, duration: clipDuration(clip), trackId: track.id })}
-                          onEdgeDown={(event, edge) => begin(event, { kind: 'trim', id: clip.id, edge, originMs: edge === 'start' ? clip.startMs : clipEnd(clip) })}
-                          onMove={onDragMove}
-                          onUp={onDragEnd}
-                          onKeySelect={(additive) => select(clip.id, additive)}
-                          onContextMenu={(event) => openMenu(event, clip.id, () => clipMenu(clip, track), clipLabel(clip, asset))}
-                        />
-                      );
-                    })}
-                    {ghost?.kind === 'clip' && ghost.trackId === row.track.id && !row.track.clips.some((clip) => clip.id === ghost.id) && (
-                      <GhostClip timeline={timeline} ghost={ghost} x={x} />
-                    )}
-                  </Lane>
+                    first={row.index === 0}
+                    last={row.index === timeline.tracks.length - 1}
+                    onMenu={(rect, items) => setMenu({ x: rect.left, y: rect.bottom, items, label: `${row.track.name} track` })}
+                    data-row={position}
+                  />
                 ),
               )}
+            </div>
 
-              <div ref={playheadRef} aria-hidden className="pointer-events-none absolute top-0 bottom-0 left-0 z-20 w-0.5 -translate-x-px bg-rec" data-testid="timeline-playhead">
-                <span className="absolute top-0 -left-1.25 h-3 w-3 rounded-b-sm bg-rec" />
+            {/* Lanes */}
+            <div className="min-w-0 flex-1">
+              <div ref={lanesRef} className="relative" style={{ width }}>
+                <div
+                  className="sticky top-0 z-10 cursor-ew-resize touch-none border-b border-line bg-surface select-none"
+                  style={{ height: RULER_HEIGHT }}
+                  role="slider"
+                  tabIndex={0}
+                  aria-label="Time ruler: click or drag to move the playhead"
+                  aria-valuemin={0}
+                  aria-valuemax={Math.round(timeline.durationMs)}
+                  aria-valuenow={Math.round(player?.time ?? 0)}
+                  data-testid="time-ruler"
+                  data-px-per-ms={scale}
+                  onPointerDown={(event) => {
+                    scrubbing.current = true;
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                    scrub(event);
+                  }}
+                  onPointerMove={(event) => scrubbing.current && scrub(event)}
+                  onPointerUp={() => (scrubbing.current = false)}
+                  onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                    if (!player) return;
+                    const step = event.shiftKey ? 1000 : 100;
+                    if (event.key === 'ArrowLeft') player.seek(player.time - step);
+                    else if (event.key === 'ArrowRight') player.seek(player.time + step);
+                    else return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                >
+                  {ticks.map((tick) => (
+                    <span key={tick.ms} className="absolute bottom-0 h-full pl-1 text-[10px] leading-7 text-fg-subtle" style={{ left: x(tick.ms) }}>
+                      <span aria-hidden className="absolute bottom-0 left-0 h-2 w-px bg-line-strong" />
+                      {tick.label}
+                    </span>
+                  ))}
+                </div>
+
+                {rows.map((row) =>
+                  row.type === 'zoom' ? (
+                    <Lane key="zoom" label="Zoom effects" testId="zoom-track" height={rowHeight(row)} onBackground={onBackground}>
+                      {timeline.zoomMarkers.length === 0 && (
+                        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-[11px] text-fg-subtle">
+                          No zoom effects. Press Z to add one at the playhead.
+                        </span>
+                      )}
+                      {timeline.zoomMarkers.map((marker) => (
+                        <MarkerBlock
+                          key={marker.id}
+                          marker={applyMarkerGhost(marker, ghost)}
+                          selected={selection.includes(marker.id)}
+                          x={x}
+                          onBodyDown={(event) => begin(event, { kind: 'marker-move', id: marker.id, originMs: marker.timeMs })}
+                          onHoldDown={(event) => begin(event, { kind: 'marker-hold', id: marker.id, originMs: marker.durationMs })}
+                          onMove={onDragMove}
+                          onUp={onDragEnd}
+                          onKeySelect={(additive) => select(marker.id, additive)}
+                          onContextMenu={(event) => openMenu(event, marker.id, () => markerMenu(marker), 'Zoom effect')}
+                        />
+                      ))}
+                    </Lane>
+                  ) : (
+                    <Lane
+                      key={row.track.id}
+                      label={`${row.track.name} track`}
+                      trackId={row.track.id}
+                      height={rowHeight(row)}
+                      dim={row.track.hidden || row.track.muted}
+                      highlight={ghost?.kind === 'clip' && ghost.trackId === row.track.id}
+                      onBackground={onBackground}
+                    >
+                      {row.track.clips.map((clip) => {
+                        const track = row.track;
+                        if (ghost?.kind === 'clip' && ghost.id === clip.id && ghost.trackId !== track.id) return null;
+                        const span = displayClip(clip);
+                        const asset = isMediaClip(clip) ? assetMap.get(clip.assetId) : undefined;
+                        const strip = asset ? filmstrips.get(asset.id) : undefined;
+                        return (
+                          <ClipBlock
+                            key={clip.id}
+                            label={clipLabel(clip, asset)}
+                            clip={clip}
+                            kind={track.kind}
+                            missing={isMediaClip(clip) && !asset}
+                            selected={selection.includes(clip.id)}
+                            invalid={ghost?.kind === 'clip' && ghost.id === clip.id && !ghost.valid}
+                            locked={Boolean(track.locked)}
+                            left={x(span.startMs)}
+                            width={Math.max(4, x(span.endMs - span.startMs))}
+                            height={rowHeight(row) - 8}
+                            filmstrip={strip && isMediaClip(clip) ? { strip, sourceStartMs: clip.sourceInMs + (span.startMs - clip.startMs), msPerPx: 1 / scale } : undefined}
+                            onBodyDown={(event) => begin(event, { kind: 'move', id: clip.id, originMs: clip.startMs, duration: clipDuration(clip), trackId: track.id })}
+                            onEdgeDown={(event, edge) => begin(event, { kind: 'trim', id: clip.id, edge, originMs: edge === 'start' ? clip.startMs : clipEnd(clip) })}
+                            onMove={onDragMove}
+                            onUp={onDragEnd}
+                            onKeySelect={(additive) => select(clip.id, additive)}
+                            onContextMenu={(event) => openMenu(event, clip.id, () => clipMenu(clip, track), clipLabel(clip, asset))}
+                          />
+                        );
+                      })}
+                      {ghost?.kind === 'clip' && ghost.trackId === row.track.id && !row.track.clips.some((clip) => clip.id === ghost.id) && (
+                        <GhostClip timeline={timeline} ghost={ghost} x={x} />
+                      )}
+                    </Lane>
+                  ),
+                )}
+
+                <div ref={playheadRef} aria-hidden className="pointer-events-none absolute top-0 bottom-0 left-0 z-20 w-0.5 -translate-x-px bg-rec" data-testid="timeline-playhead">
+                  <span className="absolute top-0 -left-1.25 h-3 w-3 rounded-b-sm bg-rec" />
+                </div>
               </div>
             </div>
           </div>

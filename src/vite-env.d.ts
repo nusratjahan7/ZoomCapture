@@ -9,3 +9,9 @@ interface DocumentPictureInPicture extends EventTarget {
 interface Window {
   documentPictureInPicture?: DocumentPictureInPicture;
 }
+
+/** Breakout Box (Chrome 94+): a camera track's frames as a stream, not yet in TypeScript's DOM lib. */
+declare class MediaStreamTrackProcessor<T = VideoFrame> {
+  constructor(init: { track: MediaStreamTrack; maxBufferSize?: number });
+  readonly readable: ReadableStream<T>;
+}

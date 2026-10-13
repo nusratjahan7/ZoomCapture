@@ -57,7 +57,13 @@ if ($Action -eq 'Click') {
   $root = [Windows.Automation.AutomationElement]::FromHandle($hwnd)
   $condition = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::NameProperty), $Name
   $button = $root.FindFirst([Windows.Automation.TreeScope]::Descendants, $condition)
-  if (-not $button) { Write-Output (@{ found = $true; clicked = $false } | ConvertTo-Json -Compress); exit 0 }
+  # A hidden button can't be clicked by a person either.
+  if (-not $button -or -not [ProbeNative]::IsWindowVisible((New-Object IntPtr $button.Current.NativeWindowHandle))) {
+    Write-Output (@{ found = $true; clicked = $false } | ConvertTo-Json -Compress); exit 0
+  }
+  # On top first: a click only counts when the button is the window under that point.
+  [void][ProbeNative]::SetWindowPos($hwnd, (New-Object IntPtr -1), 0, 0, 0, 0, 0x0001 -bor 0x0002 -bor 0x0010 -bor 0x0040)
+  Start-Sleep -Milliseconds 50
   # Press and release the left button on it (window messages, so the real mouse doesn't move).
   $target = New-Object IntPtr $button.Current.NativeWindowHandle
   $box = $button.Current.BoundingRectangle

@@ -50,6 +50,17 @@ export async function runModule06(test, getEnv, relaunch) {
       const overflow = await editor.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.equal(overflow, 0, `no horizontal page scroll at ${width}×${height}`);
     }
+    // A short window: the timeline scrolls, and its last track can be brought fully into view.
+    await editor.setViewport({ width: 1280, height: 400 });
+    await sleep(300);
+    const lastTrack = await editor.$eval('section[aria-label="Timeline"] > div', (scroller) => {
+      scroller.scrollTop = scroller.scrollHeight;
+      const lanes = [...scroller.querySelectorAll('[data-track-id]')];
+      const last = lanes.at(-1).getBoundingClientRect();
+      const box = scroller.getBoundingClientRect();
+      return { scrolls: scroller.scrollHeight > scroller.clientHeight, inView: last.bottom <= box.top + scroller.clientHeight + 1 && last.top >= box.top };
+    });
+    assert.deepEqual(lastTrack, { scrolls: true, inView: true }, 'last track reachable');
     await editor.setViewport({ width: 1440, height: 900 });
     await sleep(300);
     for (const label of ['Undo', 'Redo']) assert.ok(await editor.$(`button[aria-label^="${label}"], button[aria-label^="Nothing to ${label.toLowerCase()}"]`));
@@ -229,15 +240,30 @@ export async function runModule06(test, getEnv, relaunch) {
     await studio.bringToFront();
     await (await button(studio, 'Choose screen')).click();
     await studio.waitForSelector('video[aria-label="Live preview of the shared surface"]');
+    // Note whether the floating window is still open at the moment recording starts.
+    await studio.evaluate(() => {
+      window.__openWhenRecording = null;
+      new MutationObserver((_, observer) => {
+        if (!document.querySelector('[role=timer]')) return;
+        window.__openWhenRecording = Boolean(documentPictureInPicture.window);
+        observer.disconnect();
+      }).observe(document.body, { subtree: true, childList: true });
+    });
     await (await button(studio, 'Start recording')).click();
     await studio.waitForFunction(() => documentPictureInPicture.window?.document.body.innerText.includes('Starts in'));
     await studio.waitForSelector('[role=timer]');
-    await studio.waitForFunction(() => !documentPictureInPicture.window, { timeout: 8000 });
+    // Closed before the recorders started, so it is in no frame of the video.
+    assert.equal(await studio.evaluate(() => window.__openWhenRecording), false, 'closed before recording started');
+    assert.equal(await studio.evaluate(() => Boolean(documentPictureInPicture.window)), false);
     await waitForText(studio, 'Floating controls hidden');
     // Stopping still works from the studio (and the toolbar popup) without the floating window.
     await sleep(2000);
     await (await button(studio, 'Stop')).click();
     await studio.waitForSelector('xpath/.//h1[contains(., "Recording saved")]', { timeout: 30_000 });
+    // The studio never scrolls sideways (hidden tooltips near the edge used to widen it).
+    await studio.setViewport({ width: 1280, height: 600 });
+    await sleep(300);
+    assert.equal(await studio.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 0, 'no horizontal scroll');
     await studio.close();
   });
 

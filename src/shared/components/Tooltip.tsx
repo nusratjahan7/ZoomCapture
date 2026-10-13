@@ -47,7 +47,9 @@ export function Tooltip({ content, children, side = 'top', align = 'center', des
           'text-xs font-medium text-fg shadow-elevated transition-opacity duration-100',
           SIDE[side],
           ALIGN[align],
-          open ? 'visible opacity-100' : 'invisible opacity-0',
+          // Closed: not laid out at all, so a tooltip near the window edge can't widen the page
+          // (a scrollbar). Still readable as a description while hidden.
+          open ? 'block opacity-100' : 'hidden',
         )}
       >
         {content}
