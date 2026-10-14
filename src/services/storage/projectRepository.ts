@@ -64,41 +64,62 @@ export async function saveProjectEdits(projectId: string, edits: ProjectEdits): 
 }
 
 /** Media a user can import into a project. */
-export const IMPORTABLE_TYPES = /^(video|audio|image)\//;
+const IMPORT_KINDS = ['video', 'audio', 'image', 'pdf'] as const;
+
+/** What was found out about a file before importing it (see services/media/importFiles). */
+export interface ImportDetails {
+  kind: (typeof IMPORT_KINDS)[number];
+  /** The real type, from the file's contents. */
+  mimeType: string;
+  info: { durationMs?: number; width?: number; height?: number; hasAudio?: boolean; pageCount?: number };
+  fingerprint?: string;
+  /** Recorded in the editor as narration. */
+  voiceover?: boolean;
+}
 
 /**
  * Stores an imported file as a project asset (metadata, bytes and the project's list, in one
- * transaction). `info` comes from probing the file in the page (length, picture size).
+ * transaction). The bytes are stored once: a file with the same fingerprint already in the
+ * project is reused (`reused: true`) instead of stored again. The original file is kept as it is.
  */
 export async function importProjectAsset(
   projectId: string,
   file: Blob & { name?: string },
-  info: { durationMs?: number; width?: number; height?: number; hasAudio?: boolean },
-): Promise<MediaAsset> {
-  const kind = file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : file.type.startsWith('image/') ? 'image' : null;
-  if (!kind) throw new Error('Only video, audio and image files can be imported.');
+  details: ImportDetails,
+): Promise<{ asset: MediaAsset; reused: boolean }> {
+  if (!IMPORT_KINDS.includes(details.kind)) throw new Error('Only video, audio, image and PDF files can be imported.');
+  const { info } = details;
   const asset: MediaAsset = {
     id: createId('ast'),
-    kind,
+    kind: details.kind,
     origin: 'import',
     projectId,
-    mimeType: file.type,
+    mimeType: details.mimeType,
     size: file.size,
     durationMs: info.durationMs === undefined ? undefined : Math.round(info.durationMs),
     startOffsetMs: 0,
     width: info.width,
     height: info.height,
     label: (file.name ?? 'Imported file').slice(0, 120),
-    hasAudio: info.hasAudio ?? kind !== 'image',
+    hasAudio: info.hasAudio ?? (details.kind === 'video' || details.kind === 'audio'),
+    pageCount: details.kind === 'pdf' ? info.pageCount : undefined,
+    fingerprint: details.fingerprint,
+    voiceover: details.voiceover || undefined,
     createdAt: Date.now(),
   };
   return withTransaction(['projects', 'assets', 'assetBlobs'], 'readwrite', async (tx) => {
     const project = await tx.objectStore('projects').get(projectId);
     if (!project) throw new Error('This project no longer exists.');
+    if (details.fingerprint) {
+      for (const id of project.importedAssetIds) {
+        const existing = await tx.objectStore('assets').get(id);
+        if (existing?.fingerprint === details.fingerprint) return { asset: existing, reused: true };
+      }
+    }
     await tx.objectStore('assets').add(asset);
     await tx.objectStore('assetBlobs').put(file, asset.id);
     await tx.objectStore('projects').put({ ...project, importedAssetIds: [...project.importedAssetIds, asset.id], updatedAt: Date.now() });
-    return asset;
+    return { asset, reused: false };
   });
 }
 

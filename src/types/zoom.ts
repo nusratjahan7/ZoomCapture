@@ -40,6 +40,12 @@ export interface ZoomMarker {
   origin: 'auto' | 'manual';
   /** Clicks this automatic marker covers (several when quick successive clicks were merged). */
   sourceEventIds?: string[];
+  /**
+   * The video clip the effect zooms into. It moves with that clip, follows it when split, is
+   * deleted with it, and is only applied while that clip is on screen (see timeline/attachment).
+   * Effects without one (older projects) belong to the lowest video clip at their time.
+   */
+  clipId?: string;
   createdAt: number;
   updatedAt: number;
 }

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { getAssetBlob } from '@/services/storage/assetRepository';
 import type { MediaAsset, MediaAssetKind } from '@/types';
 
-export type AssetUrls = ReadonlyMap<string, { url: string; kind: MediaAssetKind }>;
+export type AssetUrls = ReadonlyMap<string, { url: string; kind: MediaAssetKind; width?: number; height?: number }>;
 
 /**
  * Temporary `blob:` URLs for every playable asset of the project (not thumbnails). URLs are
@@ -26,7 +26,7 @@ export function useAssetUrls(assets: readonly MediaAsset[]): AssetUrls {
         if (!blob) return null;
         const url = URL.createObjectURL(blob);
         created.push(url);
-        return [asset.id, { url, kind: asset.kind }] as const;
+        return [asset.id, { url, kind: asset.kind, width: asset.width, height: asset.height }] as const;
       }),
     ).then((entries) => {
       if (active) setUrls(new Map(entries.filter((entry) => entry !== null)));

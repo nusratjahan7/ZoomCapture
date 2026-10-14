@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { updateMarkerOnTimeline } from '@/services/timeline/attachment';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -23,7 +24,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { frameAt, type Filmstrip } from '@/services/media/filmstrip';
-import { clipDuration, clipEnd, findClip, isMediaClip } from '@/services/timeline/model';
+import { clipDuration, clipEnd, DEFAULT_STILL_MS, findClip, isMediaClip, isStill } from '@/services/timeline/model';
 import { moveTrack, nearestFreeStart, removeTrack, updateMediaClip, updateTrack } from '@/services/timeline/operations';
 import { snapPoints, snapSpan, snapTime } from '@/services/timeline/snapping';
 import { markerSpan, updateMarker } from '@/services/zoom/markers';
@@ -33,6 +34,9 @@ import { cn } from '@/utils/cn';
 import { formatTimecode, useEditor, useEditorState, usePlayheadListener } from '../state/EditorContext';
 import { ContextMenu, type MenuState } from './ContextMenu';
 import { useFilmstrips } from './useFilmstrips';
+import { ASSET_DRAG_TYPE } from './MediaLibrary';
+import { hasFiles, useImportFiles } from './useImportFiles';
+import { useThumbnail } from './useThumbnail';
 import { useTimelineActions } from './useTimelineActions';
 
 const TRACK_ICONS: Record<TrackKind, LucideIcon> = { video: Video, camera: Webcam, audio: AudioLines, music: Music, text: Type };
@@ -238,7 +242,7 @@ export function TimelinePanel() {
         finalGhost.timeMs !== undefined ? 'Move zoom effect' : 'Change zoom duration',
         (project) => ({
           ...project,
-          timeline: { ...project.timeline, zoomMarkers: updateMarker(project.timeline.zoomMarkers, current.id, patch, project.timeline.durationMs) },
+          timeline: updateMarkerOnTimeline(project.timeline, current.id, patch),
         }),
         { select: [current.id] },
       );
@@ -248,6 +252,36 @@ export function TimelinePanel() {
   const cancelDrag = () => {
     drag.current = null;
     setGhost(null);
+  };
+
+  // ── Dropping files or library items: placed at the time (and track) under the pointer ──
+  const { importFiles } = useImportFiles();
+  const [dropTime, setDropTime] = useState<number | null>(null);
+  const dropTarget = (event: DragEvent<HTMLElement>) => {
+    const rect = lanesRef.current?.getBoundingClientRect();
+    const timeMs = rect && event.clientX >= rect.left ? Math.max(0, (event.clientX - rect.left) / scale) : (player?.time ?? 0);
+    return { timeMs: Math.round(timeMs), trackId: trackAtClientY(event.clientY, '') || undefined };
+  };
+  const onDropOver = (event: DragEvent<HTMLElement>) => {
+    if (!hasFiles(event) && !event.dataTransfer.types.includes(ASSET_DRAG_TYPE)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDropTime(dropTarget(event).timeMs);
+  };
+  const onDropHere = (event: DragEvent<HTMLElement>) => {
+    setDropTime(null);
+    const assetId = event.dataTransfer.getData(ASSET_DRAG_TYPE);
+    if (!assetId && !hasFiles(event)) return;
+    event.preventDefault();
+    const target = dropTarget(event);
+    if (assetId) {
+      const asset = assetMap.get(assetId);
+      if (!asset) return;
+      if (asset.kind === 'pdf') actions.addPdfPages(asset, [1], DEFAULT_STILL_MS, target.timeMs, target.trackId);
+      else actions.addMedia(asset, target.timeMs, target.trackId);
+    } else {
+      void importFiles([...event.dataTransfer.files], target);
+    }
   };
 
   // ── Right-click menus ───────────────────────────────────────────────────────────
@@ -265,7 +299,7 @@ export function TimelinePanel() {
 
   const clipMenu = (clip: TimelineClip, track: TimelineTrack): MenuState['items'] => {
     const asset = isMediaClip(clip) ? assetMap.get(clip.assetId) : undefined;
-    const audible = isMediaClip(clip) && track.kind !== 'camera' && asset?.kind !== 'image' && asset?.hasAudio !== false;
+    const audible = isMediaClip(clip) && track.kind !== 'camera' && !(asset && isStill(asset)) && asset?.hasAudio !== false;
     const playhead = player?.time ?? 0;
     const items: MenuState['items'] = [
       { label: 'Split at playhead', icon: Scissors, shortcut: 'S', disabled: playhead <= clip.startMs || playhead >= clipEnd(clip), onSelect: () => actions.split() },
@@ -325,8 +359,12 @@ export function TimelinePanel() {
 
   const ticks = useMemo(() => rulerTicks(width / scale, pxPerSecond ?? 60), [width, scale, pxPerSecond]);
 
-  const clipLabel = (clip: TimelineClip, asset: MediaAsset | undefined) =>
-    clip.type === 'text' ? clip.text || 'Text' : asset ? (asset.origin === 'import' ? (asset.label ?? 'Imported') : (ASSET_NAMES[asset.kind] ?? asset.kind)) : 'Missing media';
+  const clipLabel = (clip: TimelineClip, asset: MediaAsset | undefined) => {
+    if (clip.type === 'text') return clip.text || 'Text';
+    if (!asset) return 'Missing media';
+    const name = asset.origin === 'import' ? (asset.label ?? 'Imported') : (ASSET_NAMES[asset.kind] ?? asset.kind);
+    return asset.kind === 'pdf' ? `${name} · p. ${clip.page ?? 1}` : name;
+  };
 
   const onBackground = (event: PointerEvent<HTMLDivElement>) => {
     store.select([]);
@@ -338,7 +376,14 @@ export function TimelinePanel() {
       {!hasLanes ? (
         <p className="m-auto p-6 text-center text-sm text-fg-subtle">The timeline is empty. Add media from the Media panel, or add a text with T.</p>
       ) : (
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto" onKeyDown={(event) => event.key === 'Escape' && cancelDrag()}>
+        <div
+          ref={scrollRef}
+          className={cn('min-h-0 flex-1 overflow-auto', dropTime !== null && 'bg-accent/5')}
+          onKeyDown={(event) => event.key === 'Escape' && cancelDrag()}
+          onDragOver={onDropOver}
+          onDragLeave={() => setDropTime(null)}
+          onDrop={onDropHere}
+        >
           <div className="flex w-max min-w-full">
             {/* Track headers: stay on the left while scrolling sideways. */}
             <div ref={headersRef} className="sticky left-0 z-30 w-28 shrink-0 border-r border-line bg-surface sm:w-44">
@@ -454,6 +499,7 @@ export function TimelinePanel() {
                             width={Math.max(4, x(span.endMs - span.startMs))}
                             height={rowHeight(row) - 8}
                             filmstrip={strip && isMediaClip(clip) ? { strip, sourceStartMs: clip.sourceInMs + (span.startMs - clip.startMs), msPerPx: 1 / scale } : undefined}
+                            still={asset && isStill(asset) && isMediaClip(clip) ? { asset, page: clip.page ?? 1 } : undefined}
                             onBodyDown={(event) => begin(event, { kind: 'move', id: clip.id, originMs: clip.startMs, duration: clipDuration(clip), trackId: track.id })}
                             onEdgeDown={(event, edge) => begin(event, { kind: 'trim', id: clip.id, edge, originMs: edge === 'start' ? clip.startMs : clipEnd(clip) })}
                             onMove={onDragMove}
@@ -632,6 +678,23 @@ function FilmstripTiles({ strip, sourceStartMs, msPerPx, width, height }: { stri
   );
 }
 
+/** An image or PDF page along a clip: one tile per picture width. */
+function StillTiles({ asset, page, width, height }: { asset: MediaAsset; page: number; width: number; height: number }) {
+  const url = useThumbnail(asset, page);
+  if (!url) return null;
+  // The file's own shape (for a PDF, its first page's); portrait pages if unknown.
+  const ratio = asset.width && asset.height ? asset.width / asset.height : asset.kind === 'pdf' ? 0.75 : 16 / 9;
+  const tileWidth = Math.max(24, Math.round(height * ratio));
+  const count = Math.min(120, Math.ceil(width / tileWidth));
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0 flex overflow-hidden bg-white/5 opacity-85">
+      {Array.from({ length: count }, (_, index) => (
+        <img key={index} src={url} alt="" draggable={false} className="h-full shrink-0 object-contain" style={{ width: tileWidth }} />
+      ))}
+    </div>
+  );
+}
+
 function ClipBlock({
   clip,
   label,
@@ -644,6 +707,7 @@ function ClipBlock({
   width,
   height,
   filmstrip,
+  still,
   onBodyDown,
   onEdgeDown,
   onMove,
@@ -662,6 +726,8 @@ function ClipBlock({
   width: number;
   height: number;
   filmstrip?: { strip: Filmstrip; sourceStartMs: number; msPerPx: number };
+  /** Images and PDF pages: their picture, repeated along the clip. */
+  still?: { asset: MediaAsset; page: number };
   onBodyDown: (event: PointerEvent<HTMLElement>) => void;
   onEdgeDown: (event: PointerEvent<HTMLElement>, edge: 'start' | 'end') => void;
 }) {
@@ -681,6 +747,7 @@ function ClipBlock({
       onContextMenu={onContextMenu}
     >
       {filmstrip && !missing && <FilmstripTiles {...filmstrip} width={width} height={height} />}
+      {still && !missing && <StillTiles {...still} width={width} height={height} />}
       <button
         type="button"
         aria-pressed={selected}

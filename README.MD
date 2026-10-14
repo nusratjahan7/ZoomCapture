@@ -3,8 +3,8 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
-**Status: Module 06 (video editor) is complete.** The editor has a media library, a canvas preview, a properties panel and a multi-track timeline. On the timeline you can split, move, trim and delete clips, edit zoom effects, add text and imported media, and change the aspect ratio. Every edit can be undone and is saved automatically. **Export video** renders the edited timeline. The original recording is never changed.
-Modules 01–05 (foundation, recording engine, recording library and storage, click tracking and automatic zoom, rendering engine) are still in place.
+**Status: Module 07 (media importing and multi-asset editing) is complete.** Videos, audio, images and screenshots, and multi-page PDFs can be imported (browse or drag and drop), checked, stored once with the project, and arranged on the timeline next to the recording. PDF pages are picked one or many at a time and shown for any length. Voiceover narration can be imported or recorded in the editor and plays over still pages. Preview and **Export video** play the whole mixed timeline, and zoom effects stay with the clips they belong to.
+Modules 01–06 (foundation, recording engine, recording library and storage, click tracking and automatic zoom, rendering engine, video editor) are still in place.
 
 ---
 
@@ -47,6 +47,7 @@ While `npm run dev` is running, click the extension's **reload** button on `chro
 | `activeTab` | Gives temporary access to **only** the tab you click the ZoomCapture toolbar icon on, and only until you leave that site. It isn't shown as a warning at install. |
 | `tabCapture` | Records exactly that tab without Chrome's picker, so ZoomCapture knows which tab is recorded and can match clicks to it. |
 | `scripting` | Puts the click tracker into that tab (it only works where `activeTab` or a site permission allows it). |
+| `optional_permissions` (`nativeMessaging`) | **Not granted at install.** Asked for only when you turn on the Windows controls helper in Settings. |
 | `optional_host_permissions` (`http/https`) | **Not granted at install.** Asked for one site at a time, and only if you click "Always allow on <site>" in the studio, so tracking keeps working after leaving and returning to that site. |
 
 There are no install-time host permissions and no content scripts registered on pages. Nothing else is requested:
@@ -199,6 +200,8 @@ Every write goes through `withTransaction()`, which aborts on any error, includi
 | `tests/e2e/module05.mjs` | (Updated for the Module 06 editor.) In real Chrome, recording a demo page (coloured grid; beeps on every click, flashes on the first): pointer path recorded at the right place → canvas preview while seeking (a corner zoom stays inside the frame), playing at 2× and **scrubbing** the timeline → switch an effect to follow-cursor, **drag an effect** to a new time, turn on the cursor highlight → **Export video** → the rendered file matches the preview at six moments (before, zooming in, following the cursor, zooming out, a moved effect, holding at a corner): mean difference ≤ 1 of 255, while a 250 ms offset differs by 25–60 → **audio in sync**: the beep starts at the same time in the original and the rendered file, and the flash appears on the same frame. |
 | `tests/unit/timeline.test.ts` | **Timeline editing (Module 06):** moving (only the position changes, never overlapping, across compatible tracks, carrying zoom effects, locked tracks), **trimming** (start and source in-point together, limits: media length, neighbour, minimum, images), **splitting** (media and text, everything under the playhead, refusals), **deleting**, placing media and text, tracks (reorder, remove only empty), snapping, recorded clicks and pointer path mapped through cuts, layer composition, output sizes and letterboxing. |
 | `tests/unit/editorStore.test.ts` | **Undo/redo** (history, merging quick edits, every operation undone and redone back to the original), refused edits, **autosave** (debounced, status, failure keeps edits and retries, flush), **reopening an edited project** after closing the database (edits kept, original recording untouched, fresh history), importing and removing media files. |
+| `tests/unit/media.test.ts` | **Module 07:** file checks (type from contents, misnamed, empty, unknown, SVG, AVI, size limits), fingerprints, **multi-page PDFs** (page count and size, damaged files refused, pages placed one after another, new track when needed, bad pages refused, any length, page changes), **mixed media** (video, images and PDF pages composed as layers), **voiceover synchronization** (heard over a still page, placed exactly in the export across mixing windows), how **zoom effects follow their clips** (move, split, duplicate, delete, trim, retime, older projects), and storing an import once (a second import reuses it; original bytes kept). |
+| `tests/e2e/module07.mjs` | In real Chrome: import a **4-page PDF**, a damaged PDF and a text file at once (the bad ones refused with reasons), import the PDF again (not stored twice) → pick pages 1 and 3 at 2 s each → the preview shows each page's colour → drop a PNG on the editor and drag it from the library onto the timeline → drop a WAV voiceover on the timeline at 1 s → play: the voiceover plays in sync while page 1 is on screen → **record a voiceover** in the editor → **reload**: imports and pages kept → **export**: pages in the video at the right times and the voiceover starting where it was placed. |
 | `tests/e2e/module06.mjs` | In real Chrome on a recording: editor layout → split at the playhead (`S`) → select and delete → undo/redo (keys and toolbar) → **move** and **trim** by dragging → keyboard nudge → add text and change the aspect ratio → autosave → **reload** shows every edit → leaving with unsaved changes asks first → export renders the edited length, square for 1:1. |
 | `tests/e2e/run.mjs` | In real Chrome: record, then save with progress and a thumbnail → rename (including validation) → **close and reopen the browser** → library still shows everything → preview (object URL revoked) → download (`E2E demo.webm`) → delete (cancel, then confirm; every row removed) → disk full: error, nothing lost, Retry saving → disk full, quit, reopen, Recover from the library. |
 
@@ -271,6 +274,49 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 ### Editing
 
 Zoom effects are edited in the video editor (see [Video editor](#video-editor-module-06)): on the timeline's *Zoom* lane, in the *Zoom* panel, and in the *Edit* (properties) panel.
+
+## Media importing (Module 07)
+
+### Importing
+
+- **How:** **Import** in the Media panel (several files at once), or drag files from your computer anywhere onto the editor. Dropped on the timeline, they are also placed there: at the time under the pointer, on that track if they fit (otherwise a free one), one after another. A dropped PDF places its pages (up to 50; pick others in the Media panel).
+- **What:** videos, audio files, images and screenshots, PDF documents.
+- **Checks before anything is stored** (`services/media/importFiles.ts`):
+  - **What it really is**, from its first bytes, not its name or the type the system reports: PDF, PNG, JPEG, GIF, WebP, BMP, AVIF, MP4/MOV/M4A, WebM/MKV, WAV, Ogg, FLAC, MP3. A misnamed file is treated as what it is (a PDF called `.png` is a PDF); a file that isn't what its name says, an empty file, SVG (convert it first) and other formats are refused with the reason.
+  - **Size:** videos up to 2 GB, audio 500 MB, images 50 MB, PDFs 200 MB, and never more than the storage space left.
+  - **Decoding:** videos and audio are opened with Mediabunny (the codec must be decodable here) **and** played in Chrome's own media player, because decoding and playing aren't the same; AVI, HEVC on a machine without support and the like are refused rather than pretending they work. PDFs are opened with pdf.js: password-protected and damaged files are refused.
+  - **Duplicates:** a fingerprint (size, modification time, and a SHA-256 of the first and last megabyte) recognises a file already in the project: the stored copy is reused and the file isn't stored twice.
+- **Storage:** each file is stored once, as it is (the original bytes), in IndexedDB, linked to its project (`Project.importedAssetIds`, `MediaAsset.projectId`). A PDF is stored as the PDF, never as page images. Removing a file is refused while a clip uses it; removing it deletes its bytes, thumbnails and open document.
+- **Library:** each file has a thumbnail (a video frame, the image, the PDF's first page), its type, length or page count or picture size, and size. Drag a file onto the timeline, or use **+** (at the playhead).
+
+### PDF pages
+
+- **Pick pages:** the chevron on a PDF opens its pages as thumbnails (drawn only as they scroll into view). Click pages to select them, Shift-click for a range, **All** / **None**, set **Each page** (seconds), then **Add N pages**: they are placed one after another at the playhead.
+- **Model:** a page is a clip that refers to the PDF and a page number (`MediaClip.page`, 1-based). Like an image, it can be shown for any length: drag its edges, or set **Duration** in its properties, where the **Page** can also be changed.
+- **Rendering:** pdf.js (Apache-2.0, bundled with its fonts, character maps and decoders under `dist/pdfjs/`, since extensions can't load code from the network). Pages are drawn on demand at the size they are shown (preview size, or the video's size when exporting), with at most a few documents open and a dozen page images kept (`render/stills.ts`), so a long PDF is never held in memory at full resolution.
+
+### Mixed media, voiceover and playback
+
+- **Arranging:** imported videos, images and pages go on video tracks (upper tracks draw on top), audio on music or audio tracks, next to the recording. They are moved, trimmed, split, deleted and reordered like the recording's clips.
+- **Voiceover:** **Record voiceover** in the Media panel records the microphone from the playhead while the preview plays silently (so the microphone doesn't pick it up). Stopping places it on the **Voiceover** track where you started; it is stored with the project like an imported audio file. Imported audio (WAV, MP3, M4A…) works the same way.
+- **One playback pipeline:** the preview player and the export compose the same layers at each moment: video frames, images and PDF pages (as stills), text and the camera bubble. Each audio or video track has its own media element in the preview and its own place in the export's mix, so sound keeps playing while a still image or page is shown. The export places every clip's sound by its timeline position and source in-point, window by window (`audioPlacement`), so a voiceover is heard exactly where it was placed.
+- **Memory:** images are decoded straight to the size needed (their size is stored at import), video thumbnails and filmstrips are small frames, object URLs are released when files leave the project or the editor closes.
+
+### Zoom effects and clips
+
+Each zoom effect belongs to the video clip it zooms into (`ZoomMarker.clipId`; `timeline/attachment.ts`):
+
+| Action | Effect |
+| --- | --- |
+| Made from clicks | Belongs to the screen recording's clip at that time |
+| Added at the playhead, or moved on the Zoom lane | Belongs to the topmost visible video clip at its time |
+| Clip moved (in time or to another track) | Its effects move by the same amount; other clips' effects stay |
+| Clip split | Effects after the cut go with the right-hand part |
+| Clip duplicated | Its effects are copied onto the copy |
+| Clip deleted | Its effects are deleted too (undo restores both) |
+| Clip trimmed | Effects stay, but an effect applies only while its clip is on screen, so one in a trimmed-away part does nothing until it's trimmed back |
+
+Effects from older projects (no clip stored) belong to the lowest visible video clip at their time: the screen recording.
 
 ## Video editor (Module 06)
 
@@ -388,7 +434,8 @@ ZoomCapture/
 │   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors,
 │   │                           # zoomCoordinates, clickTracking, zoomMarkers, render, renderVideo,
 │   │                           # timeline, editorStore
-│   ├── e2e/{run,lib,module04,module05,module06,screenshots}.mjs   # Puppeteer + Chrome against dist/
+│   ├── e2e/{run,lib,module04,module05,module06,module07,screenshots}.mjs   # Puppeteer + Chrome against dist/
+│   ├── fixtures/makePdf.mjs                           # test PDFs (coloured, numbered pages) and WAV tones
 │   └── native/{run,extension}.mjs, probe.ps1           # Windows controls helper on the real desktop
 ├── public/                     # copied verbatim into dist/
 │   ├── manifest.json           # Manifest V3
@@ -662,3 +709,30 @@ Automated: `npm test` (154 unit tests) and `npm run test:e2e` (end-to-end, see T
 
 **Export**
 - [ ] **Export video** renders the edited timeline: cuts, moved clips, text, imported media and zoom, with the audio of every audible clip in sync and muted tracks silent.
+
+---
+
+## Module 07 test checklist
+
+Automated: `npm test` (174 unit tests) and `npm run test:e2e` (30 end-to-end tests). Manual checks:
+
+**Importing**
+- [ ] Import an MP4, an MP3, a PNG screenshot and a multi-page PDF with **Import**, then again by dragging them onto the editor. Each shows a thumbnail, its type, length (or pages, or size) and file size.
+- [ ] Drop a video on the timeline at 0:10: it is placed there. Drop a PDF on the timeline: its pages are placed one after another.
+- [ ] Import the same file twice: "already in this project", and it is listed once.
+- [ ] Try a renamed text file (`notes.mp4`), a damaged or password-protected PDF, an `.avi`, an SVG and a file over the limit: each is refused with its reason, and the others in the same drop still import.
+
+**PDF pages**
+- [ ] Open a PDF's pages, select pages with click and Shift-click, set 3 s per page, **Add N pages**: they follow each other at the playhead, labelled "p. N".
+- [ ] Stretch a page clip to 20 s; change its page in Properties; split and delete pages.
+
+**Voiceover and playback**
+- [ ] **Record voiceover** over a few pages: the preview plays silently while you speak; stop: the clip appears on the Voiceover track where you started. Play: your voice plays in sync while the pages change.
+- [ ] Mix the recording, an imported video, an image and pages on different tracks: playback and the exported video show the right layer on top at each moment, with all sounds.
+
+**Zoom effects**
+- [ ] Add a zoom effect over the screen recording, then move the recording: the effect moves with it. Move an image clip lying over it: the effect stays.
+- [ ] Split the recording after an effect: it stays with the right part. Delete that part: the effect goes too; undo brings both back.
+
+**Persistence**
+- [ ] Close and reopen the project: imports, pages and voiceovers are all there; removing an unused import frees its space.

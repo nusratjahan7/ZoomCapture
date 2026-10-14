@@ -1,10 +1,11 @@
+import { updateMarkerOnTimeline } from '@/services/timeline/attachment';
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { Copy, Focus, MousePointer2, MousePointerClick, Scissors, Sparkles, Trash2, ZoomIn } from 'lucide-react';
 import { renderEffectsOf } from '@/services/render/frameState';
 import { describeMimeType } from '@/services/recording/mimeTypes';
-import { clipDuration, findClip, isMediaClip } from '@/services/timeline/model';
+import { clipDuration, findClip, isMediaClip, isStill } from '@/services/timeline/model';
 import { setClipTiming, updateMediaClip, updateTextClip } from '@/services/timeline/operations';
-import { updateMarker, type MarkerPatch } from '@/services/zoom/markers';
+import type { MarkerPatch } from '@/services/zoom/markers';
 import { Button, SegmentedControl, Toggle } from '@/shared/components';
 import {
   TRANSITION_MS,
@@ -87,8 +88,10 @@ function ItemActions({ onDuplicate, canSplit }: { onDuplicate?: boolean; canSpli
 function MediaClipProperties({ clip, track }: { clip: MediaClip; track: TimelineTrack }) {
   const { store, assets, assetLookup } = useEditor();
   const asset = assets.find((candidate) => candidate.id === clip.assetId);
-  const audible = track.kind !== 'camera' && asset?.kind !== 'image' && asset?.hasAudio !== false;
+  const still = Boolean(asset && isStill(asset));
+  const audible = track.kind !== 'camera' && !still && asset?.hasAudio !== false;
   const edit = (label: string, change: (project: Project) => Project, mergeKey?: string) => store.edit(label, change, { mergeKey });
+  const pages = asset?.kind === 'pdf' ? (asset.pageCount ?? 1) : 0;
   return (
     <Section title={asset?.origin === 'import' ? (asset.label ?? 'Imported clip') : `${track.name} clip`}>
       {!asset && <p className="rounded-lg bg-danger/10 p-2 text-xs text-danger">This clip’s media is missing (its file was removed). Delete the clip or undo the removal.</p>}
@@ -99,7 +102,18 @@ function MediaClipProperties({ clip, track }: { clip: MediaClip; track: Timeline
         min={100}
         onCommit={(durationMs) => edit('Change duration', (p) => ({ ...p, timeline: setClipTiming(p.timeline, clip.id, { durationMs }, assetLookup) }))}
       />
-      {asset?.kind !== 'image' && (
+      {still && <p className="text-[11px] text-fg-subtle">Shown for as long as you like: set the duration, or drag the clip’s edges.</p>}
+      {pages > 0 && (
+        <NumberField
+          label={`Page (of ${pages})`}
+          value={clip.page ?? 1}
+          min={1}
+          max={pages}
+          decimals={0}
+          onCommit={(page) => edit('Change page', (p) => ({ ...p, timeline: updateMediaClip(p.timeline, clip.id, { page: Math.round(page) }) }))}
+        />
+      )}
+      {!still && (
         <FieldRow label="Source">
           <span className="font-mono text-xs text-fg-muted" data-testid="clip-source">
             {formatTimecode(clip.sourceInMs)} – {formatTimecode(clip.sourceOutMs)}
@@ -207,7 +221,7 @@ function MarkerProperties({ marker }: { marker: ZoomMarker }) {
   const change = (label: string, patch: MarkerPatch, mergeKey?: string) =>
     store.edit(
       label,
-      (p) => ({ ...p, timeline: { ...p.timeline, zoomMarkers: updateMarker(p.timeline.zoomMarkers, marker.id, patch, p.timeline.durationMs) } }),
+      (p) => ({ ...p, timeline: updateMarkerOnTimeline(p.timeline, marker.id, patch) }),
       { mergeKey },
     );
   const speed = speedOf(marker.transitionMs);

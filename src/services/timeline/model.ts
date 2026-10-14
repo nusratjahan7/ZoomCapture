@@ -56,6 +56,7 @@ const TRACK_FOR_ASSET: Partial<Record<MediaAssetKind, TrackKind[]>> = {
   screen: ['video'],
   video: ['video'],
   image: ['video'],
+  pdf: ['video'],
   camera: ['camera'],
   microphone: ['audio', 'music'],
   'system-audio': ['audio', 'music'],
@@ -72,9 +73,14 @@ export function acceptsClip(track: TimelineTrack, clip: TimelineClip, assetKind?
   return assetKind !== undefined && trackKindsFor({ kind: assetKind }).includes(track.kind);
 }
 
-/** Whether an asset has a fixed length (videos and audio) or can be shown for any time (images). */
+/** Stills (images and PDF pages) can be shown for any length; videos and audio have their own. */
+export function isStill(asset: Pick<MediaAsset, 'kind'>): boolean {
+  return asset.kind === 'image' || asset.kind === 'pdf';
+}
+
+/** Whether an asset has a fixed length (videos and audio) or can be shown for any time (stills). */
 export function hasFixedLength(asset: Pick<MediaAsset, 'kind'>): boolean {
-  return asset.kind !== 'image';
+  return !isStill(asset);
 }
 
 export const TRACK_NAMES: Record<TrackKind, string> = {

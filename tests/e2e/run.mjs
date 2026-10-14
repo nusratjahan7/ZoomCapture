@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { runModule04 } from './module04.mjs';
 import { runModule05 } from './module05.mjs';
 import { runModule06 } from './module06.mjs';
+import { runModule07 } from './module07.mjs';
 import { button, dbCounts, dialogButton, launch, readRecordings, recordClip, restoreDisk, simulateFullDisk, sleep, waitForText } from './lib.mjs';
 
 const profile = mkdtempSync(join(tmpdir(), 'zoomcapture-e2e-'));
@@ -210,6 +211,7 @@ await test('interrupted save: survives a browser restart and is recovered from t
 await runModule04(test, () => env, relaunch);
 await runModule05(test, () => env, relaunch);
 await runModule06(test, () => env, relaunch);
+await runModule07(test, () => env, relaunch);
 
 await test('no page errors were logged', async () => {
   // Expected errors from the simulated full disk are reported in the UI, not thrown.
