@@ -2,7 +2,7 @@
 // undo/redo, move, trim (pointer and keyboard), text, aspect ratio, autosave, reopening, the
 // unsaved-changes guard, and exporting the edited timeline.
 import assert from 'node:assert/strict';
-import { button, dialogButton, readRecordings, recordClip, seekEditor, sleep, waitForText, waitSaved } from './lib.mjs';
+import { button, dialogButton, readRecordings, recordClip, seekEditor, sleep, waitForText, startExport, waitSaved } from './lib.mjs';
 
 function readProject(page, projectId) {
   return page.evaluate(async (id) => {
@@ -212,7 +212,7 @@ export async function runModule06(test, getEnv, relaunch) {
     await waitSaved(editor);
     const project = await readProject(editor, recording.projectId);
     await (await button(editor, 'Export video')).click();
-    await (await dialogButton(editor, 'Render')).click();
+    await startExport(editor);
     await editor.waitForSelector('[data-testid=rendered-video]', { timeout: 120_000 });
     await editor.waitForFunction(() => document.querySelector('[data-testid=rendered-video]').readyState >= 1);
     const duration = await editor.$eval('[data-testid=rendered-video]', (v) => v.duration);

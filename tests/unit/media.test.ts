@@ -6,7 +6,10 @@ import { describe, expect, it, beforeAll } from 'vitest';
 import { checkSize, classifyFile, fingerprint, IMPORT_LIMITS, sniffType } from '@/services/media/importFiles';
 import { PdfError, probePdf, setPdfLibraryLoader } from '@/services/media/pdf';
 import { UnsupportedMediaError } from '@/services/media/probe';
+import { clampTransform, cropEdge, fittedTransform, placement, resizeFromCorner, setCrop } from '@/services/render/clipFrame';
 import { activeVisuals, timelineScene } from '@/services/render/compose';
+import { drawFrame } from '@/services/render/draw';
+import { frameStateAt } from '@/services/render/frameState';
 import { audibleClips, audioPlacement } from '@/services/render/renderVideo';
 import { finalizeDraft } from '@/services/recording/finalizeRecording';
 import { getAssetBlob } from '@/services/storage/assetRepository';
@@ -20,6 +23,7 @@ import {
   duplicateClip,
   moveClip,
   setClipTiming,
+  setClipTransform,
   splitClip,
   trimClip,
   TimelineEditError,
@@ -273,5 +277,73 @@ describe('storing imports', () => {
     // The original bytes are kept as they are.
     const stored = await getAssetBlob(first.asset.id);
     expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(new Uint8Array(await pdf.arrayBuffer()));
+  });
+});
+
+describe('cropping and moving a clip’s picture', () => {
+  const frame = 16 / 9;
+  const square = { width: 1000, height: 1000 };
+
+  it('fits a picture inside the frame and centres it when it has no transform', () => {
+    expect(fittedTransform(square, frame)).toEqual({ crop: { left: 0, top: 0, right: 0, bottom: 0 }, x: (1 - 9 / 16) / 2, y: 0, width: 9 / 16 });
+    // A picture shaped like the frame fills it.
+    expect(placement({ width: 1920, height: 1080 }, frame)).toMatchObject({ x: 0, y: 0, width: 1, height: 1 });
+  });
+
+  it('keeps the picture’s shape when moved and resized, and part of it in the frame', () => {
+    const small = clampTransform({ crop: { left: 0, top: 0, right: 0, bottom: 0 }, x: 0.7, y: 0.6, width: 0.25 }, square, frame);
+    const shown = placement(square, frame, small);
+    expect(shown.height).toBeCloseTo(0.25 * frame); // square stays square on a 16:9 frame
+    // Dragged far off the frame: held with 5 % still inside.
+    expect(clampTransform({ ...small, x: 5, y: -5 }, square, frame)).toMatchObject({ x: 0.95, y: Number((0.05 - shown.height).toFixed(4)) });
+    // Resizing from the top-left corner keeps the bottom-right corner in place.
+    const bigger = resizeFromCorner(small, square, frame, 'top-left', { x: 0.5, y: 0.2 });
+    const after = placement(square, frame, bigger);
+    expect(after.x + after.width).toBeCloseTo(shown.x + shown.width, 3);
+    expect(after.y + after.height).toBeCloseTo(shown.y + shown.height, 3);
+    expect(after.width / after.height).toBeCloseTo(shown.width / shown.height, 3);
+  });
+
+  it('crops an edge without moving or rescaling the rest of the picture', () => {
+    const start = fittedTransform({ width: 1920, height: 1080 }, frame);
+    // Cut 10 % of the frame's width from the left: the picture's right edge and scale stay.
+    const cut = cropEdge(start, { width: 1920, height: 1080 }, frame, 'left', 0.1);
+    expect(cut.crop.left).toBeCloseTo(0.1);
+    const shown = placement({ width: 1920, height: 1080 }, frame, cut);
+    expect(shown.x).toBeCloseTo(0.1);
+    expect(shown.x + shown.width).toBeCloseTo(1);
+    expect(shown.sx).toBeCloseTo(192);
+    // Cropping the bottom changes only the height.
+    const bottom = setCrop(cut, { width: 1920, height: 1080 }, frame, 'bottom', 0.25);
+    expect(placement({ width: 1920, height: 1080 }, frame, bottom)).toMatchObject({ y: 0, sh: 810 });
+    expect(placement({ width: 1920, height: 1080 }, frame, bottom).height).toBeCloseTo(0.75);
+    // Never more than 45 % per edge, 90 % per direction.
+    expect(setCrop(start, square, frame, 'left', 0.8).crop.left).toBe(0.45);
+  });
+
+  it('draws the cropped part where it was placed, through the zoom camera', () => {
+    const calls: unknown[][] = [];
+    const ctx = new Proxy({} as Record<string, unknown>, {
+      get: (_target, key) => (key === 'drawImage' ? (...args: unknown[]) => calls.push(args) : () => undefined),
+      set: () => true,
+    }) as unknown as CanvasRenderingContext2D;
+    const image = {} as CanvasImageSource;
+    const transform = { crop: { left: 0.5, top: 0, right: 0, bottom: 0.5 }, x: 0.6, y: 0.1, width: 0.3 };
+    const state = frameStateAt({ markers: [], clicks: [], cursor: [], effects: { clickEmphasis: false, cursorHighlight: false }, zoom: false }, 0);
+    drawFrame(ctx, 1600, 900, { layers: [{ image, width: 800, height: 450, transform }] }, state);
+    // Source: the top-right quarter; destination: 30 % wide at (60 %, 10 %), keeping its 16:9 shape.
+    expect(calls[0]).toEqual([image, 400, 0, 400, 225, 960, 90, 480, 270]);
+  });
+
+  it('stores the transform on clips on video tracks only, and removes it on reset', () => {
+    const base = timelineOf([track('slides', 'video', [media('p', 'deck', 0, 5000, { page: 1 })]), track('voice', 'audio', [media('vo', 'voice', 0, 5000)])]);
+    const transform = { crop: { left: 0.1, top: 0, right: 0, bottom: 0 }, x: 0.5, y: 0.5, width: 0.4 };
+    const moved = setClipTransform(base, 'p', transform);
+    expect((moved.tracks[0]!.clips[0] as MediaClip).transform).toEqual(transform);
+    // Splitting keeps it on both parts; reset removes it.
+    const { timeline: split, rightId } = splitClip(moved, 'p', 2000);
+    expect((split.tracks[0]!.clips.find((c) => c.id === rightId) as MediaClip).transform).toEqual(transform);
+    expect('transform' in setClipTransform(moved, 'p', undefined).tracks[0]!.clips[0]!).toBe(false);
+    expect(() => setClipTransform(base, 'vo', transform)).toThrow(/Only pictures on video tracks/);
   });
 });

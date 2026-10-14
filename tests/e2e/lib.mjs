@@ -218,3 +218,9 @@ export async function setRange(handle, value) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
   }, value);
 }
+
+/** Starts the export in the open export dialog, once it can start (after the encoder check). */
+export async function startExport(page, label = 'Start export') {
+  const start = await page.waitForSelector(`xpath/.//dialog[@open]//button[contains(normalize-space(.), "${label}")][not(@disabled)]`, { timeout: 30_000 });
+  await start.click();
+}

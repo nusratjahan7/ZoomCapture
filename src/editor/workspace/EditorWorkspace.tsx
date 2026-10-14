@@ -10,7 +10,8 @@ import { Button, Dialog, IconButton, LogoMark, useToast } from '@/shared/compone
 import { useRecordingActions } from '@/shared/hooks/useRecordingActions';
 import type { AspectRatio, MediaAsset } from '@/types';
 import { createId } from '@/utils/id';
-import { RenderVideoDialog } from '../components/RenderVideoDialog';
+import { ExportDialog } from '../components/ExportDialog';
+import { clampCustomSize } from '@/services/render/enhancements';
 import { EditorContext, useEditor, useEditorState, type EditorContextValue } from '../state/EditorContext';
 import { EditorStore } from '../state/EditorStore';
 import { ControlBar } from './ControlBar';
@@ -28,6 +29,7 @@ const ASPECTS: Array<{ value: AspectRatio; label: string }> = [
   { value: '9:16', label: '9:16 Portrait' },
   { value: '1:1', label: '1:1 Square' },
   { value: '4:3', label: '4:3' },
+  { value: 'custom', label: 'Custom size…' },
 ];
 
 /** Identifies this page in library change events (to recognise its own saves). */
@@ -89,6 +91,16 @@ export function EditorWorkspace({ details }: { details: RecordingDetails }) {
   const [player, setPlayer] = useState<TimelinePlayer | null>(null);
   const [snapping, setSnapping] = useState(true);
   const timelineZoom = useRef<(factor: number | 'fit') => void>(() => undefined);
+  // The export dialog: opened from the toolbar (video) or the control bar (a still of the playhead).
+  const [exportMode, setExportMode] = useState<'video' | 'still' | null>(null);
+  const openExport = useCallback(
+    (mode: 'video' | 'still') => {
+      playerRef.current?.pause();
+      void store.flush();
+      setExportMode(mode);
+    },
+    [store],
+  );
   const urls = useAssetUrls(assets);
   const assetLookup = useMemo<AssetLookup>(() => {
     const map = new Map(assets.map((asset) => [asset.id, asset]));
@@ -104,8 +116,8 @@ export function EditorWorkspace({ details }: { details: RecordingDetails }) {
   );
   const forgetAsset = useCallback((assetId: string) => setAssets((current) => current.filter((asset) => asset.id !== assetId)), []);
   const context = useMemo<EditorContextValue>(
-    () => ({ store, player, setPlayer, recording, assets, assetLookup, addAssets, forgetAsset, reportError, playheadMs, snapping, setSnapping, timelineZoom }),
-    [store, player, recording, assets, assetLookup, addAssets, forgetAsset, reportError, playheadMs, snapping],
+    () => ({ store, player, setPlayer, recording, assets, assetLookup, addAssets, forgetAsset, reportError, playheadMs, snapping, setSnapping, timelineZoom, openExport }),
+    [store, player, recording, assets, assetLookup, addAssets, forgetAsset, reportError, playheadMs, snapping, openExport],
   );
 
   // Never lose edits: save on leaving, and ask first while a save is pending or failed.
@@ -161,6 +173,7 @@ export function EditorWorkspace({ details }: { details: RecordingDetails }) {
         )}
         <EditorLayout urls={urls} />
       </div>
+      <ProjectExportDialog mode={exportMode} onClose={() => setExportMode(null)} />
     </EditorContext.Provider>
   );
 }
@@ -183,9 +196,8 @@ function EditorLayout({ urls }: { urls: ReturnType<typeof useAssetUrls> }) {
     setTimeout(() => (stayOnTab.current = false), 0);
   }, []);
   const selection = useEditorState((snapshot) => snapshot.selection);
-  const [options, setOptions] = useState<PreviewOptions>({ previewZoom: true, framing: false, speed: 1 });
+  const [options, setOptions] = useState<PreviewOptions>({ previewZoom: true, framing: false, clipFraming: false, speed: 1 });
   const changeOptions = useCallback((patch: Partial<PreviewOptions>) => setOptions((current) => ({ ...current, ...patch })), []);
-  const setFraming = useCallback((framing: boolean) => changeOptions({ framing }), [changeOptions]);
 
   // Selecting something shows its properties; clearing the selection goes back to the last tab.
   const hasSelection = selection.length > 0;
@@ -216,7 +228,8 @@ function EditorLayout({ urls }: { urls: ReturnType<typeof useAssetUrls> }) {
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredHeight() ?? Math.round(window.innerHeight * 0.32));
   const timeline = useEditorState((snapshot) => snapshot.project.timeline);
   // Never taller than its tracks: spare height goes to the preview.
-  const contentHeight = timelineContentHeight(timeline);
+  const hasCaptions = useEditorState((snapshot) => snapshot.project.subtitles.some((track) => track.cues.length > 0));
+  const contentHeight = timelineContentHeight(timeline, hasCaptions);
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
   useEffect(() => {
     const onResize = () => setViewportHeight(window.innerHeight);
@@ -287,7 +300,7 @@ function EditorLayout({ urls }: { urls: ReturnType<typeof useAssetUrls> }) {
           />
         )}
         <div className="min-w-0 flex-1 bg-canvas">
-          <PreviewPane urls={urls} options={options} onFramingChange={setFraming} />
+          <PreviewPane urls={urls} options={options} onOptionsChange={changeOptions} cameraEditing={side.open && side.tab === 'camera'} />
         </div>
       </div>
       <ControlBar options={options} onOptionsChange={changeOptions} />
@@ -348,7 +361,7 @@ function SaveIndicator() {
 }
 
 function Toolbar() {
-  const { store, player, recording, assets, setSnapping, snapping, timelineZoom } = useEditor();
+  const { store, player, recording, setSnapping, snapping, timelineZoom, openExport } = useEditor();
   const toast = useToast();
   const canUndo = useEditorState((snapshot) => snapshot.canUndo);
   const canRedo = useEditorState((snapshot) => snapshot.canRedo);
@@ -357,7 +370,6 @@ function Toolbar() {
   const project = useEditorState((snapshot) => snapshot.project);
   const actions = useTimelineActions();
   const recordingActions = useRecordingActions({ onDeleted: () => window.location.replace('index.html') });
-  const [exporting, setExporting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [help, setHelp] = useState(false);
 
@@ -398,7 +410,15 @@ function Toolbar() {
             <span className="sr-only xl:hidden">Aspect ratio</span>
             <select
               value={project.aspectRatio}
-              onChange={(event) => store.edit('Change aspect ratio', (p) => ({ ...p, aspectRatio: event.target.value as AspectRatio }))}
+              onChange={(event) => {
+                const aspectRatio = event.target.value as AspectRatio;
+                // Custom starts from the recording's own size (edited in the Canvas panel).
+                store.edit('Change aspect ratio', (p) => ({
+                  ...p,
+                  aspectRatio,
+                  customSize: aspectRatio === 'custom' ? (p.customSize ?? clampCustomSize({ width: recording.width ?? 1920, height: recording.height ?? 1080 })) : p.customSize,
+                }));
+              }}
               className="h-8 rounded-lg border border-line bg-surface-2 px-1.5 text-xs text-fg"
             >
               {ASPECTS.map((aspect) => (
@@ -428,25 +448,13 @@ function Toolbar() {
             icon={Clapperboard}
             aria-label="Export video"
             className="ml-1"
-            onClick={() => {
-              player?.pause();
-              void store.flush();
-              setExporting(true);
-            }}
+            onClick={() => openExport('video')}
           >
             <span className="hidden sm:inline">Export video</span>
           </Button>
         </div>
       </header>
       {recordingActions.dialogs}
-      <RenderVideoDialog
-        open={exporting}
-        onClose={() => setExporting(false)}
-        recording={recording}
-        project={project}
-        assets={assets}
-        onSettingsChange={(exportSettings) => store.setSettings((p) => ({ ...p, exportSettings }))}
-      />
       <Dialog open={help} onClose={() => setHelp(false)} title="Keyboard shortcuts" description="Shortcuts work when no text field has focus.">
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
           {SHORTCUTS.map((shortcut) => (
@@ -460,5 +468,25 @@ function Toolbar() {
         </dl>
       </Dialog>
     </>
+  );
+}
+
+/** The export dialog with the current project (one for the whole editor). */
+function ProjectExportDialog({ mode, onClose }: { mode: 'video' | 'still' | null; onClose: () => void }) {
+  const { store, recording, assets } = useEditor();
+  const project = useEditorState((snapshot) => snapshot.project);
+  // Keeps the last mode while closing, so the dialog doesn't change under its closing animation.
+  const lastMode = useRef<'video' | 'still'>('video');
+  if (mode) lastMode.current = mode;
+  return (
+    <ExportDialog
+      open={mode !== null}
+      mode={lastMode.current}
+      onClose={onClose}
+      recording={recording}
+      project={project}
+      assets={assets}
+      onSettingsChange={(exportSettings) => store.setSettings((p) => ({ ...p, exportSettings }))}
+    />
   );
 }

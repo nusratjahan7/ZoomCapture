@@ -61,10 +61,11 @@ export function timelineScene(project: Pick<Project, 'timeline' | 'renderEffects
   };
 }
 
-const RATIOS: Record<Exclude<AspectRatio, 'source'>, number> = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '4:3': 4 / 3 };
+const RATIOS: Record<Exclude<AspectRatio, 'source' | 'custom'>, number> = { '16:9': 16 / 9, '9:16': 9 / 16, '1:1': 1, '4:3': 4 / 3 };
 
-/** Width / height of the output for an aspect setting. */
-export function aspectValue(aspect: AspectRatio, source: Size): number {
+/** Width / height of the output for an aspect setting (`custom`: the project's own dimensions). */
+export function aspectValue(aspect: AspectRatio, source: Size, custom?: Size): number {
+  if (aspect === 'custom') return custom && custom.width > 0 && custom.height > 0 ? custom.width / custom.height : source.width / source.height;
   return aspect === 'source' ? source.width / source.height : RATIOS[aspect];
 }
 
@@ -89,9 +90,10 @@ const even = (value: number) => Math.max(2, Math.round(value / 2) * 2);
  * Output frame size for an aspect ratio and resolution. The resolution names the short side
  * (1080p → 1920×1080 landscape, 1080×1920 portrait), never larger than the recording's short side.
  */
-export function frameSize(source: Size, aspect: AspectRatio, resolution: ExportSettings['resolution']): Size {
-  const ratio = aspectValue(aspect, source);
-  const sourceShort = Math.min(source.width, source.height);
+export function frameSize(source: Size, aspect: AspectRatio, resolution: ExportSettings['resolution'], custom?: Size): Size {
+  const ratio = aspectValue(aspect, source, custom);
+  // Custom dimensions: exactly those (never larger than the resolution asks).
+  const sourceShort = aspect === 'custom' && custom ? Math.min(custom.width, custom.height) : Math.min(source.width, source.height);
   const short = resolution === 'source' ? sourceShort : Math.min(RESOLUTION_HEIGHT[resolution], sourceShort);
   return ratio >= 1 ? { width: even(short * ratio), height: even(short) } : { width: even(short), height: even(short / ratio) };
 }

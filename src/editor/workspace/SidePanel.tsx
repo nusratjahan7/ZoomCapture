@@ -1,24 +1,33 @@
 import { useState } from 'react';
-import { Film, MousePointer2, PanelLeftClose, SlidersHorizontal, Type, ZoomIn, type LucideIcon } from 'lucide-react';
+import { AudioLines, Captions, Film, MousePointer2, Palette, PanelLeftClose, SlidersHorizontal, Type, Webcam, ZoomIn, type LucideIcon } from 'lucide-react';
 import { timelineScene } from '@/services/render/compose';
 import { attachMarkers } from '@/services/timeline/attachment';
 import { clipsOfAsset } from '@/services/timeline/mapping';
 import { clipEnd } from '@/services/timeline/model';
 import { regenerateAutoMarkers, updateMarker } from '@/services/zoom/markers';
-import { Button, ConfirmDialog, IconButton } from '@/shared/components';
-import type { TextClip, ZoomMarker } from '@/types';
+import { ConfirmDialog, IconButton } from '@/shared/components';
+import type { ZoomMarker } from '@/types';
 import { cn } from '@/utils/cn';
 import { ZoomEffectsPanel } from '../components/ZoomEffectsPanel';
-import { formatTimecode, useEditor, useEditorState } from '../state/EditorContext';
+import { useEditor, useEditorState } from '../state/EditorContext';
 import { MediaLibrary } from './MediaLibrary';
+import { AudioPanel } from './panels/AudioPanel';
+import { BackgroundPanel } from './panels/BackgroundPanel';
+import { CameraPanel } from './panels/CameraPanel';
+import { CaptionsPanel } from './panels/CaptionsPanel';
+import { OverlaysPanel } from './panels/OverlaysPanel';
 import { CursorSettings, PropertiesContent } from './PropertiesPanel';
 import { useTimelineActions } from './useTimelineActions';
 
-export type SideTab = 'media' | 'text' | 'zoom' | 'cursor' | 'edit';
+export type SideTab = 'media' | 'background' | 'camera' | 'audio' | 'text' | 'captions' | 'zoom' | 'cursor' | 'edit';
 
 export const SIDE_TABS: ReadonlyArray<{ value: SideTab; label: string; title: string; icon: LucideIcon }> = [
   { value: 'media', label: 'Media', title: 'Media library', icon: Film },
-  { value: 'text', label: 'Text', title: 'Text', icon: Type },
+  { value: 'background', label: 'Canvas', title: 'Background & layout', icon: Palette },
+  { value: 'camera', label: 'Camera', title: 'Camera bubble', icon: Webcam },
+  { value: 'audio', label: 'Audio', title: 'Audio & music', icon: AudioLines },
+  { value: 'text', label: 'Text', title: 'Text & overlays', icon: Type },
+  { value: 'captions', label: 'Captions', title: 'Subtitles', icon: Captions },
   { value: 'zoom', label: 'Zoom', title: 'Zoom effects', icon: ZoomIn },
   { value: 'cursor', label: 'Cursor', title: 'Cursor & clicks', icon: MousePointer2 },
   { value: 'edit', label: 'Edit', title: 'Properties', icon: SlidersHorizontal },
@@ -28,7 +37,8 @@ export const SIDE_TABS: ReadonlyArray<{ value: SideTab; label: string; title: st
 export function SideRail({ tab, open, onPick }: { tab: SideTab; open: boolean; onPick: (tab: SideTab) => void }) {
   const selectionCount = useEditorState((snapshot) => snapshot.selection.length);
   return (
-    <nav aria-label="Editor panels" className="flex w-14 shrink-0 flex-col items-center overflow-y-auto border-r border-line bg-surface py-2">
+    // On short windows the rail scrolls (wheel, touch, Tab) without a scrollbar: one would be wider than the gap beside the buttons.
+    <nav aria-label="Editor panels" className="flex w-14 shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto border-r border-line bg-surface py-2 [scrollbar-width:none]">
       <div role="tablist" aria-orientation="vertical" aria-label="Panels" className="flex flex-col gap-1">
         {SIDE_TABS.map((item) => {
           const active = open && tab === item.value;
@@ -85,50 +95,16 @@ export function SidePanel({
       </header>
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         {tab === 'media' && <MediaLibrary keepTab={keepTab} />}
-        {tab === 'text' && <TextTab />}
+        {tab === 'background' && <BackgroundPanel />}
+        {tab === 'camera' && <CameraPanel />}
+        {tab === 'audio' && <AudioPanel keepTab={keepTab} />}
+        {tab === 'text' && <OverlaysPanel keepTab={keepTab} />}
+        {tab === 'captions' && <CaptionsPanel />}
         {tab === 'zoom' && <ZoomTab keepTab={keepTab} />}
         {tab === 'cursor' && <CursorSettings />}
         {tab === 'edit' && <PropertiesContent />}
       </div>
     </aside>
-  );
-}
-
-function TextTab() {
-  const { store, player } = useEditor();
-  const actions = useTimelineActions();
-  const timeline = useEditorState((snapshot) => snapshot.project.timeline);
-  const selection = useEditorState((snapshot) => snapshot.selection);
-  const texts = timeline.tracks.flatMap((track) => track.clips.filter((clip): clip is TextClip => clip.type === 'text'));
-  return (
-    <div className="space-y-3 p-3">
-      <Button size="sm" icon={Type} onClick={() => actions.addText()}>
-        Add text at playhead
-      </Button>
-      <p className="text-xs text-fg-subtle">Titles and captions drawn over the video. Select one to edit its words, size and colour, or drag it in the preview.</p>
-      {texts.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-line p-4 text-center text-xs text-fg-subtle">No text yet. Press T to add one at the playhead.</p>
-      ) : (
-        <ul className="space-y-1" aria-label="Texts on the timeline">
-          {texts.map((clip) => (
-            <li key={clip.id}>
-              <button
-                type="button"
-                onClick={() => {
-                  store.select([clip.id]);
-                  player?.seek(clip.startMs);
-                }}
-                className={cn('flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left', selection.includes(clip.id) ? 'bg-accent-soft' : 'hover:bg-surface-2')}
-              >
-                <Type size={13} aria-hidden className="shrink-0 text-accent-2" />
-                <span className="min-w-0 flex-1 truncate text-[13px]">{clip.text || 'Empty text'}</span>
-                <span className="font-mono text-[11px] text-fg-subtle">{formatTimecode(clip.startMs)}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }
 

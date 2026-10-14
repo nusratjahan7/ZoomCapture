@@ -3,8 +3,8 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
-**Status: Module 07 (media importing and multi-asset editing) is complete.** Videos, audio, images and screenshots, and multi-page PDFs can be imported (browse or drag and drop), checked, stored once with the project, and arranged on the timeline next to the recording. PDF pages are picked one or many at a time and shown for any length. Voiceover narration can be imported or recorded in the editor and plays over still pages. Preview and **Export video** play the whole mixed timeline, and zoom effects stay with the clips they belong to.
-Modules 01–06 (foundation, recording engine, recording library and storage, click tracking and automatic zoom, rendering engine, video editor) are still in place.
+**Status: Module 09 (media export) is complete.** The edited project exports as a real **MP4** (H.264 + AAC, made with WebCodecs, not renamed WebM), **WebM**, an **animated GIF**, or a **PNG / JPEG** of any frame (also straight from the preview with **Save this frame**). Resolution, aspect ratio, frame rate, quality or bitrate, GIF size, frame rate, colours and part, image size and JPEG quality, the file name and where it is saved are chosen in one dialog, with a summary of the result before anything is rendered. Progress, cancelling, refusing a second export at the same time, and failures (unsupported codecs, too large for memory, encoder errors, a full disk) are handled and explained. Every format is drawn by the same renderer as the editor preview, and the tests check the files themselves: structure, codecs, length, zoom, subtitles and audio sync.
+Modules 01–08 (foundation, recording engine, recording library and storage, click tracking and automatic zoom, rendering engine, video editor, media importing, video enhancements) are still in place.
 
 ---
 
@@ -56,6 +56,9 @@ There are no install-time host permissions and no content scripts registered on 
 - Camera and microphone use `getUserMedia()`. Chrome prompts on the extension's origin the first time.
 - Pages are opened and focused with `tabs.create/update/remove` and `runtime.getContexts`, which don't need the `tabs` permission.
 - Downloads go through a normal `<a download>` link, so the `downloads` permission isn't needed.
+- **Save to a file I choose** (exports) uses the File System Access save dialog (`showSaveFilePicker`), which asks you each time and gives access to that one file only. No permission is declared for it.
+- **Content Security Policy:** extension pages use `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'`. `'wasm-unsafe-eval'` is needed only to compile WebAssembly (the speech-recognition engine, ONNX Runtime, bundled under `dist/ort/`). It doesn't allow `eval` of JavaScript or loading scripts from anywhere else.
+- **Speech model download:** the first time you click **Generate subtitles**, the chosen Whisper model (about 40–80 MB) is downloaded from Hugging Face (`huggingface.co`) and kept in the browser's cache. This is a normal page request, so no host permission is needed. Your audio is never uploaded; recognition runs on this device. Nothing is downloaded unless you start it.
 - ZoomCapture never bypasses Chrome's permission prompts or sharing picker. Chrome shows its "sharing this screen" indicator for the whole recording.
 
 ---
@@ -126,7 +129,7 @@ What Chrome lets an extension capture depends on the source. ZoomCapture tells y
 ### Output format and export
 
 Recordings are WebM (VP9 or VP8 video, Opus audio), which is what Chrome's MediaRecorder produces reliably on every platform. **Download** (**Download original** in the editor) saves that file without re-encoding.
-**Export video** in the editor renders the edited timeline (cuts, layers, text, zoom effects, overlays, camera bubble and mixed audio) into a new WebM (see [Video editor](#video-editor-module-06) and [Rendering engine](#rendering-engine-module-05)). MP4 and GIF are not produced yet: asking the `services/export` interface for them raises `ExportUnavailableError` instead of producing a file that is wrongly labelled or empty.
+**Export video** in the editor renders the edited timeline into MP4, WebM, an animated GIF, or a PNG / JPEG still: see [Media export](#media-export-module-09).
 
 ## Recording library and storage (Module 03)
 
@@ -200,8 +203,13 @@ Every write goes through `withTransaction()`, which aborts on any error, includi
 | `tests/e2e/module05.mjs` | (Updated for the Module 06 editor.) In real Chrome, recording a demo page (coloured grid; beeps on every click, flashes on the first): pointer path recorded at the right place → canvas preview while seeking (a corner zoom stays inside the frame), playing at 2× and **scrubbing** the timeline → switch an effect to follow-cursor, **drag an effect** to a new time, turn on the cursor highlight → **Export video** → the rendered file matches the preview at six moments (before, zooming in, following the cursor, zooming out, a moved effect, holding at a corner): mean difference ≤ 1 of 255, while a 250 ms offset differs by 25–60 → **audio in sync**: the beep starts at the same time in the original and the rendered file, and the flash appears on the same frame. |
 | `tests/unit/timeline.test.ts` | **Timeline editing (Module 06):** moving (only the position changes, never overlapping, across compatible tracks, carrying zoom effects, locked tracks), **trimming** (start and source in-point together, limits: media length, neighbour, minimum, images), **splitting** (media and text, everything under the playhead, refusals), **deleting**, placing media and text, tracks (reorder, remove only empty), snapping, recorded clicks and pointer path mapped through cuts, layer composition, output sizes and letterboxing. |
 | `tests/unit/editorStore.test.ts` | **Undo/redo** (history, merging quick edits, every operation undone and redone back to the original), refused edits, **autosave** (debounced, status, failure keeps edits and retries, flush), **reopening an edited project** after closing the database (edits kept, original recording untouched, fresh history), importing and removing media files. |
-| `tests/unit/media.test.ts` | **Module 07:** file checks (type from contents, misnamed, empty, unknown, SVG, AVI, size limits), fingerprints, **multi-page PDFs** (page count and size, damaged files refused, pages placed one after another, new track when needed, bad pages refused, any length, page changes), **mixed media** (video, images and PDF pages composed as layers), **voiceover synchronization** (heard over a still page, placed exactly in the export across mixing windows), how **zoom effects follow their clips** (move, split, duplicate, delete, trim, retime, older projects), and storing an import once (a second import reuses it; original bytes kept). |
-| `tests/e2e/module07.mjs` | In real Chrome: import a **4-page PDF**, a damaged PDF and a text file at once (the bad ones refused with reasons), import the PDF again (not stored twice) → pick pages 1 and 3 at 2 s each → the preview shows each page's colour → drop a PNG on the editor and drag it from the library onto the timeline → drop a WAV voiceover on the timeline at 1 s → play: the voiceover plays in sync while page 1 is on screen → **record a voiceover** in the editor → **reload**: imports and pages kept → **export**: pages in the video at the right times and the voiceover starting where it was placed. |
+| `tests/unit/media.test.ts` | **Module 07:** file checks (type from contents, misnamed, empty, unknown, SVG, AVI, size limits), fingerprints, **multi-page PDFs** (page count and size, damaged files refused, pages placed one after another, new track when needed, bad pages refused, any length, page changes), **mixed media** (video, images and PDF pages composed as layers), **voiceover synchronization** (heard over a still page, placed exactly in the export across mixing windows), how **zoom effects follow their clips** (move, split, duplicate, delete, trim, retime, older projects), **cropping and moving pictures** (fitted by default, shape kept, kept in the frame, corner resize, edge crop without moving the rest, crop limits, drawn through the camera, stored only on video tracks, kept by splits), and storing an import once (a second import reuses it; original bytes kept). |
+| `tests/e2e/module07.mjs` | In real Chrome: import a **4-page PDF**, a damaged PDF and a text file at once (the bad ones refused with reasons), import the PDF again (not stored twice) → pick pages 1 and 3 at 2 s each → the preview shows each page's colour → drop a PNG on the editor and drag it from the library onto the timeline → drop a WAV voiceover on the timeline at 1 s → play: the voiceover plays in sync while page 1 is on screen → **record a voiceover** in the editor → **reload**: imports and pages kept → **position** the image: shrink it from a corner, drag it to the top-left, crop its right edge; the preview draws it there → **export**: pages in the video at the right times, the image where it was placed, and the voiceover starting where it was placed. |
+| `tests/unit/enhancements.test.ts` | **Module 08:** frame layout (padding keeps the shape, never empty), backgrounds (colour, gradient, every preset, image cover / contain / tile, blur) and drawing behind a rounded, shadowed recording; custom sizes (limits, even numbers, shape kept); the **camera bubble** (unchanged by default, rounded crop at its own shape, **kept inside the frame** at any position, ring and shadow); **audio mix** (track × clip volume, fade in / out, gain points for the export, silent tracks skipped); **subtitles** (add, edit, refuse too short, delete, split long transcripts, skip "[music]"-style noise, replace a range, SRT and VTT), subtitle drawing (position, line breaks, box), callouts and opacity; and **every effect surviving reopening** (edited through the editor store, the database closed, the project read back). |
+| `tests/e2e/module08.mjs` | In real Chrome on a recording with a camera: **background** colour behind a *Floating* layout (corner shows it, middle shows the recording), a preset → **camera** made rounded with an orange ring and dragged past the corner (stops inside the frame, ring drawn) → **automatic subtitles**: a sentence spoken by Windows text-to-speech is recognised by the local Whisper model ("welcome", "subtitles"), then corrected (skipped off Windows) → **music** with a 2 s fade-in at 50 % track volume: the preview plays it at 25 % half-way into the fade → a **subtitle** typed by hand with a line break, at the top, drawn in the preview and shown on the Captions lane → **text watermark**, **logo** (bottom right, drawn), **callout** → **custom size** 1080×1350 → **reload**: every setting identical, the background still drawn → **export**: 1080×1350 with mixed audio, background and subtitle in the video. |
+| `tests/unit/export.test.ts` | **Module 09:** settings from older projects (defaults, repairs), bitrates per quality / codec / size / frame rate, GIF size, timing, range and limits, size estimates and the memory budget, safe file names; **pipeline choice** (MP4 via WebCodecs even where MediaRecorder can't write MP4, codec fallbacks, no audio encoder, clear refusals); plan problems (empty, unsupported, GIF too long, too large for memory but fine to a file); **one export at a time** (in the page and across tabs, released after failures); errors in words; chosen files kept only when complete; the in-memory limit. |
+| `tests/unit/gif.test.ts` | **GIF encoder**, checked with an independent decoder (`gifDecoder.ts`): a valid looping GIF89a whose frames decode to the input, only changed rectangles stored and unchanged frames merged into longer delays (total time kept), play-once, palette reduction with and without dithering, LZW with code-size growth and table resets over 70 000 pixels, output in bounded chunks. |
+| `tests/e2e/module09.mjs` | In real Chrome, a tab recording with a click (zoom, beep) and a subtitle → **summary** for each format, updated as settings change → **MP4**: `ftyp`/`moov`/`mdat` covering the whole file, H.264 + AAC, right length, last frame decodes, frames match the preview before and during the zoom, subtitle drawn as in the preview, **beep at the same time as in the recording**, downloaded byte for byte, object URL released → **WebM** (VP9 + Opus) → **GIF**: chosen part, size and frame rate, animated, loops, 2 s long, a zoomed frame matching the preview → **PNG and JPEG** from **Save this frame** at the playhead, matching the preview → **save to a chosen file**: written as it is made (media first, metadata last), plays; a cancelled export leaves the file empty → **duplicates**: a double click starts one export, another tab is refused while it runs, then can export → **failures**: no MP4 encoder (explained, Start disabled), an encoder error mid-export (explained, then a retry works). |
 | `tests/e2e/module06.mjs` | In real Chrome on a recording: editor layout → split at the playhead (`S`) → select and delete → undo/redo (keys and toolbar) → **move** and **trim** by dragging → keyboard nudge → add text and change the aspect ratio → autosave → **reload** shows every edit → leaving with unsaved changes asks first → export renders the edited length, square for 1:1. |
 | `tests/e2e/run.mjs` | In real Chrome: record, then save with progress and a thumbnail → rename (including validation) → **close and reopen the browser** → library still shows everything → preview (object URL revoked) → download (`E2E demo.webm`) → delete (cancel, then confirm; every row removed) → disk full: error, nothing lost, Retry saving → disk full, quit, reopen, Recover from the library. |
 
@@ -275,6 +283,121 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 
 Zoom effects are edited in the video editor (see [Video editor](#video-editor-module-06)): on the timeline's *Zoom* lane, in the *Zoom* panel, and in the *Edit* (properties) panel.
 
+## Media export (Module 09)
+
+**Export video** (top right) and **Save this frame** (the image button next to the time, under the preview) open the same dialog. Settings are kept with the project.
+
+### Formats and how each is made
+
+| Format | Made with | Settings |
+| --- | --- | --- |
+| **MP4** | WebCodecs `VideoEncoder` / `AudioEncoder` (hardware when available), muxed by Mediabunny into ISO MP4: **H.264** (else HEVC, AV1 or VP9 in MP4) with **AAC** (else Opus in MP4) | Resolution (full size, 2160p–480p), frame rate (24, 25, 30, 60), quality (low, standard, high, or a custom bitrate 0.5–100 Mbps), camera on/off |
+| **WebM** | WebCodecs, VP9 (else VP8, AV1) with Opus | Same as MP4 |
+| **Animated GIF** | ZoomCapture's own GIF89a encoder (`services/export/gif.ts`) | Size (longest side 320–1280 px), frame rate (5–25), colours (64, 128, 256), dithering, loop, the part of the timeline (from / to) |
+| **PNG / JPEG** | The canvas's image encoder | Resolution, the frame (playhead by default), JPEG quality |
+
+The aspect ratio (16:9, 9:16, 1:1, 4:3, the recording's own, or custom) is the project's, and can be changed in the dialog too.
+
+**Choosing the pipeline** (`services/export/capabilities.ts`): when the dialog opens, ZoomCapture checks what this browser can encode:
+- **WebCodecs** encoders are probed codec by codec, per container. Exports use them because they are frame-exact and faster than real time, and encode exactly the frames the preview draws.
+- **MediaRecorder** is checked and reported, but never used to export. It records in real time from a playing stream, and its MP4 support depends on the browser and version. ZoomCapture never assumes it writes MP4.
+- **FFmpeg.wasm isn't bundled.** It would add about 30 MB, run several times slower than the hardware encoders, and need a worker CSP exception, while WebCodecs, the GIF encoder and canvas image encoding already cover every format.
+
+If a format can't be made here, the summary says why (and suggests the other video format), and **Start export** is disabled.
+
+### Same picture as the preview
+
+Every format draws its frames with `render/frameRenderer.ts`, which calls the same `drawFrame` as the editor preview, in timeline order:
+- every visible video, image and PDF page on the video tracks, bottom layer first, with position, crop and opacity;
+- the zoom effects;
+- the background and frame layout;
+- the camera bubble;
+- text, callouts and watermarks;
+- subtitles.
+
+Hidden tracks are left out. Source video is decoded in order with WebCodecs (`FrameCursor`), and each frame is released as soon as it is drawn.
+
+**Audio** (video formats): every audible clip is mixed at its timeline position with its volume, track volume and fades (the preview's own gain calculation), in 30-second `OfflineAudioContext` windows, then encoded. The tests check that a click's beep starts at the same moment in the export as in the recording.
+
+### Summary, progress and results
+
+- **Before rendering**, a summary shows the format and codecs, size and shape, frame rate and frame count, length (or the GIF's part, or the still's time), quality and bitrate, audio, the estimated file size, the file name and where it goes. Problems known in advance are shown there (empty timeline, unsupported format, GIF too long, too large for memory).
+- **While rendering:** the stage (checking the media, choosing GIF colours, rendering frame N of M with time left, finishing the file) and **Cancel export**. Leaving the page asks first.
+- **Done:** the result plays (or shows) in the dialog, with its real size, frame rate, length, codecs and file size, and any warnings (e.g. a lower resolution used because the encoder refused 4K, or a clip that couldn't be decoded).
+- **Failed or cancelled:** the reason in words and what to try (`describeExportError`): cancelled (nothing saved), another export running, format not supported here, out of memory or too large for memory, disk full, the recording can't be decoded, or the encoder failed.
+
+### Saving, memory and resources
+
+- **Downloads folder:** the file is made in memory, then saved with **Download** (a normal download, so Chrome's "Ask where to save each file" setting applies).
+  - The memory budget is a quarter of the device memory, between 512 MB and 2 GB.
+  - Exports estimated above it aren't started.
+  - The size is also watched while encoding, so an export that grows past the budget stops with an explanation.
+  - In memory, MP4 puts its metadata first ("fast start").
+- **A file I choose:** the save dialog asks for the name and folder first, then the file is written as it is made.
+  - Memory use doesn't grow with the length: MP4 metadata is written at the end, GIF frames are written as they finish, and the writer applies back-pressure.
+  - The file is only kept when the export completes. If it is cancelled or fails, it is discarded and nothing half-written is left.
+- **File names** are the recording's name (or what you type), made safe for every system, with the format's extension.
+- **One export at a time:** a second click is ignored (Start becomes Cancel, which ignores clicks in its first moment), and a second editor tab trying to export at the same time is refused (Web Locks).
+- **Released when done:**
+  - decoders, decoded frames and images (`StillCache`);
+  - the drawing canvas (shrunk to zero);
+  - mixed audio buffers;
+  - the result's object URL (on closing the dialog);
+  - and on cancel or failure, the muxer and the chosen file.
+- **Limits:**
+  - GIFs: at most 1500 frames and 400 million pixels in total (about 640×360 for 1500 frames).
+  - Images: at most 8192 px on a side.
+  - Custom bitrate: 0.5–100 Mbps.
+
+## Video enhancements (Module 08)
+
+Everything is in the editor's side panel: **Canvas**, **Camera**, **Audio**, **Text & overlays** and **Captions**. Each change is one undo step, saved automatically, and drawn by the same code in the preview and the export (`services/render/draw.ts`).
+
+### Canvas: size, background and layout (`render/backgrounds.ts`, `render/enhancements.ts`)
+
+- **Size:** 16:9, 9:16, 1:1, 4:3, the recording's own shape, or **Custom** (128–4096 px per side, even numbers; presets such as 1080×1350 and 1200×628). The preview takes the new shape, and the recording, camera, text and subtitles keep their places relative to the frame. The export renders at that size (`compose.frameSize`).
+- **Background:** none (black), a colour, a two-colour gradient with an angle, a built-in preset (ten, drawn in code, so nothing is downloaded), or an image you upload (stored with the project like any import), fitted by **cover**, **contain**, **stretch** or **tile**, with a focus position and an optional blur.
+- **Layout:** *Fill*, *Padded*, *Floating*, *Spotlight*, or your own padding (0–30 %), corner radius and shadow. The recording is drawn inside the padding at its own shape (`layoutRect`), so the background shows around it.
+- **Model:** `Project.background` (`BackgroundStyle`), `Project.frameLayout` (`FrameLayout`), `Project.aspectRatio` (`'custom'` plus `Project.customSize`). Older projects have none of these, and draw exactly as before.
+
+### Camera bubble
+
+- **Style:** circle or rounded rectangle (with its proportions and corner radius), size, border width and colour, shadow, and a coloured **ring** behind the picture (with its width). **Reset** goes back to the default.
+- **Place:** one of the corners from the panel, or, while the Camera panel is open, **drag the bubble in the preview** and drag its corner handle to resize it (arrow keys and + / − work too). It is always kept inside the frame, at any canvas size.
+- **Model:** `CameraLayout` (`shape`, `aspect`, `radius`, `borderWidth`, `borderColor`, `shadow`, `background`, `padding`, plus `x`, `y`, `scale`). Only shown when the recording has a camera.
+
+### Audio: volumes and music (`render/audioMix.ts`)
+
+- **Separate volumes:** one slider and mute per sound source on the timeline: the recording's captured audio, the microphone and tab audio stems, music, voiceovers. (The microphone and tab sound are also inside the recording's audio, so their own tracks start muted; unmute them to balance them separately.)
+- **Music:** **Add music** places a file on a music track from the start. Each music clip has its start, end (or **End with the video**), volume, **fade in** and **fade out** (up to 30 s, at most half the clip each).
+- **Same mix everywhere:** a clip's level is track volume × clip volume × fade (`clipGain`). The preview sets each media element's volume from it on every frame; the export writes the same curve as gain automation in its `OfflineAudioContext` (`gainPoints`). A muted or silent track isn't decoded for the export at all.
+
+### Subtitles (`timeline/subtitles.ts`, `services/transcription/`)
+
+- **By hand:** **Add at playhead**, then edit the text (Shift+Enter for a line break), start and end (or set them to the playhead), and delete. The cue under the playhead is highlighted; cues also show on a **Captions** lane under the timeline (click one to go to it). A cue is at least 0.2 s long.
+- **Style:** show or hide, font, size, colour, background box (colour, opacity), position (top, middle, bottom) and margin. Long lines wrap inside the frame.
+- **Download:** `.srt` or `.vtt`.
+- **Generated from speech (real, local):**
+  - Choose the tracks to listen to (the microphone by default) and a model: *Fast* (Whisper tiny.en, about 40 MB), *Better* (base.en, about 80 MB) or *Many languages* (base, about 80 MB).
+  - The chosen tracks are mixed down to 16 kHz mono (`timelineSpeech`) and recognised by OpenAI's Whisper model through Transformers.js (`@huggingface/transformers`) on ONNX Runtime WebAssembly, in a worker, so the editor stays responsive. The audio never leaves the device.
+  - The model is downloaded from Hugging Face the first time (with progress) and then cached by the browser. You can cancel at any point; the worker is ended and its memory released.
+  - Speech is handled in 28-second parts (silent parts are skipped). Timestamps become cues, split if longer than 6 s or two lines; noise tags such as "[music]" are dropped.
+  - The result replaces the current subtitles (asking first; undo brings them back) and is meant to be **reviewed**: names and quiet speech can come out wrong.
+  - Without a network connection the first time, or if the model can't be loaded, you get an error saying so, and nothing is changed.
+- **Model:** `Project.subtitles` (`SubtitleTrack` → cues `{ id, startMs, endMs, text }`) and `Project.subtitleStyle`.
+
+### Text, overlays and watermarks
+
+- **Text overlays:** **Add text** places a text clip at the playhead. Its font, size, colour, box colour, opacity and position are in Properties.
+- **Callouts:** **Add callout** places a text with an arrow; Properties sets where the arrow points (X / Y in the frame).
+- **Text watermark:** your text over the whole video, small, bottom right, at 60 % opacity.
+- **Logo watermark:** upload an image (or pick one already imported). It goes on its own top video track for the whole video, 14 % wide, bottom right, at 85 % opacity. Move, resize and crop it like any picture (**Position**), and set its opacity in Properties.
+- **Duration:** watermarks and overlays are timeline clips, so their length is trimmed on the timeline like anything else. Any clip on a video track has an **opacity** setting; any clip with sound has fades.
+
+### Resources
+
+Media elements, object URLs, decoded images (`StillCache`), the speech worker and its audio buffers are released when no longer used (closing the editor, removing a file, cancelling or finishing recognition). The export releases its decoders and frames, even when cancelled.
+
 ## Media importing (Module 07)
 
 ### Importing
@@ -301,6 +424,15 @@ Zoom effects are edited in the video editor (see [Video editor](#video-editor-mo
 - **Voiceover:** **Record voiceover** in the Media panel records the microphone from the playhead while the preview plays silently (so the microphone doesn't pick it up). Stopping places it on the **Voiceover** track where you started; it is stored with the project like an imported audio file. Imported audio (WAV, MP3, M4A…) works the same way.
 - **One playback pipeline:** the preview player and the export compose the same layers at each moment: video frames, images and PDF pages (as stills), text and the camera bubble. Each audio or video track has its own media element in the preview and its own place in the export's mix, so sound keeps playing while a still image or page is shown. The export places every clip's sound by its timeline position and source in-point, window by window (`audioPlacement`), so a voiceover is heard exactly where it was placed.
 - **Memory:** images are decoded straight to the size needed (their size is stored at import), video thumbnails and filmstrips are small frames, object URLs are released when files leave the project or the editor closes.
+
+### Moving, resizing and cropping pictures
+
+Any clip on a video track (the screen recording, an imported video, an image, a PDF page) can be placed anywhere in the frame, at any size, and cropped:
+
+- **In the preview:** select the clip and click **Position** under the preview. Drag the picture to move it, a corner to resize it (it keeps its shape, the opposite corner stays put), or switch to **Crop** and drag an edge to cut it (the rest of the picture stays where it is). Arrow keys move it, + and − resize it. **Reset** puts it back (fitted in the frame), **Done** closes the handles. Zoom preview is paused while positioning, so the handles match the picture.
+- **Exact values:** Properties → *Position & crop*: left, top, width (percent of the frame) and crop per edge.
+- **Model:** `MediaClip.transform` (`ClipTransform`: crop fractions per edge, top-left corner and width as fractions of the frame; the height follows from the picture's shape). Without it a picture is fitted and centred, as before. Limits: at most 45 % cropped per edge (90 % per direction), 5 %–400 % of the frame wide, and at least 5 % of it inside the frame. Geometry and limits are in `render/clipFrame.ts`; the preview and the export draw it the same way, through the zoom camera.
+- Each drag is one undo step. Splitting or duplicating a clip keeps its position and crop.
 
 ### Zoom effects and clips
 
@@ -433,8 +565,8 @@ ZoomCapture/
 ├── tests/
 │   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors,
 │   │                           # zoomCoordinates, clickTracking, zoomMarkers, render, renderVideo,
-│   │                           # timeline, editorStore
-│   ├── e2e/{run,lib,module04,module05,module06,module07,screenshots}.mjs   # Puppeteer + Chrome against dist/
+│   │                           # timeline, editorStore, media, enhancements, export, gif (+ gifDecoder)
+│   ├── e2e/{run,lib,module04,…,module09,screenshots}.mjs   # Puppeteer + Chrome against dist/
 │   ├── fixtures/makePdf.mjs                           # test PDFs (coloured, numbered pages) and WAV tones
 │   └── native/{run,extension}.mjs, probe.ps1           # Windows controls helper on the real desktop
 ├── public/                     # copied verbatim into dist/
@@ -461,11 +593,13 @@ ZoomCapture/
     │   └── hooks/{useRecordingFlow,useDisplayCapture,useClickTracking,useUserMediaStream,useDocumentPip,useStudioCommands}.ts
     ├── editor/                 # recording library + video editor
     │   ├── EditorPage.tsx      # ?recording=<id> (older ?project=<id> links still work)
-    │   ├── components/{RecordingLibrary,RecordingWorkspace,ZoomEffectsPanel,RenderVideoDialog,
+    │   ├── components/{RecordingLibrary,RecordingWorkspace,ZoomEffectsPanel,ExportDialog,
     │   │               RecoverableRecordings,EditorHeader}.tsx
     │   ├── state/{EditorStore,EditorContext}   # undo/redo, autosave, selection; playhead hooks
     │   └── workspace/{EditorWorkspace,PreviewPane,TimelinePanel,PropertiesPanel,MediaSidebar,
-    │                  FramingOverlay,fields}.tsx, useTimelineActions, useEditorShortcuts, useAssetUrls
+    │                  FramingOverlay,CameraHandle,ClipFrameOverlay,fields}.tsx, useTimelineActions,
+    │                  useEditorShortcuts, useAssetUrls
+    │                  panels/{Background,Camera,Audio,Captions,Overlays}Panel.tsx, common.tsx
     ├── settings/{SettingsPage,AutoZoomSettingsPanel}.tsx   # options page
     ├── shared/
     │   ├── components/         # Button, IconButton, Toggle, Tooltip, Dialog/ConfirmDialog,
@@ -481,11 +615,17 @@ ZoomCapture/
     │   ├── media/{displayCapture,tabCapture,userMedia,audioLevel,thumbnail,probe}.ts
     │   ├── zoom/               # coordinates, clicks (filter + dedupe, pointer batches), support (per source), markers
     │   ├── render/             # camera, paths (pointer, smoothing), frameState, draw, output, compose,
-    │   │                       # TimelinePlayer (editor preview), renderVideo (WebCodecs export)
-    │   ├── timeline/           # model, operations (move/trim/split/…), snapping, mapping, history
+    │   │                       # TimelinePlayer (editor preview), frameRenderer (frames for every export),
+    │   │                       # renderVideo (MP4 / WebM with WebCodecs),
+    │   │                       # backgrounds, enhancements (defaults, layout), audioMix, clipFrame
+    │   ├── transcription/      # transcribe (audio mix-down, worker control), worker (Whisper)
+    │   ├── timeline/           # model, operations (move/trim/split/…), snapping, mapping, history, subtitles
     │   ├── recording/          # RecordingController, TrackRecorder, RecordingClock, audioMixer,
     │   │                       # mimeTypes, webmDuration, finalizeRecording
-    │   ├── export/             # Exporter interface, original-file exporter, download helper
+    │   ├── export/             # capabilities (pipeline choice), settings (defaults, bitrates, limits),
+    │   │                       # exportMedia (workflow, GIF and stills, one job at a time, errors),
+    │   │                       # gif (GIF89a encoder), saveTarget (chosen file / memory), download,
+    │   │                       # exporters (the original recording as it is)
     │   └── storage/            # db (schema), migrations, recordingRepository, projectRepository,
     │                           # projectDefaults, assetRepository, recordingDraftRepository,
     │                           # libraryEvents, storageStatus
@@ -494,7 +634,7 @@ ZoomCapture/
     └── styles/globals.css      # Tailwind v4 + design tokens
 ```
 
-Build output: `dist/manifest.json`, `dist/background.js`, `dist/content/click-tracker.js`, `dist/{popup,recording,editor,settings}/index.html`, `dist/assets/*` (the video encoder is in its own `renderVideo-*.js` chunk, loaded only when rendering), `dist/icons/*`.
+Build output: `dist/manifest.json`, `dist/background.js`, `dist/content/click-tracker.js`, `dist/{popup,recording,editor,settings}/index.html`, `dist/assets/*` (the video encoder is in its own `renderVideo-*.js` chunk, loaded only when rendering), `dist/icons/*`, `dist/pdfjs/*` (pdf.js fonts and decoders), `dist/ort/*` (ONNX Runtime WebAssembly, loaded only when generating subtitles).
 
 ---
 
@@ -714,7 +854,7 @@ Automated: `npm test` (154 unit tests) and `npm run test:e2e` (end-to-end, see T
 
 ## Module 07 test checklist
 
-Automated: `npm test` (174 unit tests) and `npm run test:e2e` (30 end-to-end tests). Manual checks:
+Automated: `npm test` (179 unit tests) and `npm run test:e2e` (31 end-to-end tests). Manual checks:
 
 **Importing**
 - [ ] Import an MP4, an MP3, a PNG screenshot and a multi-page PDF with **Import**, then again by dragging them onto the editor. Each shows a thumbnail, its type, length (or pages, or size) and file size.
@@ -730,9 +870,66 @@ Automated: `npm test` (174 unit tests) and `npm run test:e2e` (30 end-to-end tes
 - [ ] **Record voiceover** over a few pages: the preview plays silently while you speak; stop: the clip appears on the Voiceover track where you started. Play: your voice plays in sync while the pages change.
 - [ ] Mix the recording, an imported video, an image and pages on different tracks: playback and the exported video show the right layer on top at each moment, with all sounds.
 
+**Position & crop**
+- [ ] Select an image over the recording, click **Position**: make it small in a corner, crop its edges, try the arrow keys and + / −. Export: it is in the same place, the same size and crop.
+- [ ] Do the same with the screen recording itself (e.g. shrink it to make room for a slide), then **Reset**.
+
 **Zoom effects**
 - [ ] Add a zoom effect over the screen recording, then move the recording: the effect moves with it. Move an image clip lying over it: the effect stays.
 - [ ] Split the recording after an effect: it stays with the right part. Delete that part: the effect goes too; undo brings both back.
 
 **Persistence**
 - [ ] Close and reopen the project: imports, pages and voiceovers are all there; removing an unused import frees its space.
+
+## Module 08 test checklist
+
+Automated: `npm test` (198 unit tests) and `npm run test:e2e` (41 end-to-end tests; the speech test needs Windows text-to-speech and a network connection for the first model download). Manual checks:
+
+**Canvas**
+- [ ] Try each background kind: colour, gradient (change the angle), each preset, and an uploaded photo with cover / contain / tile and blur.
+- [ ] Pick *Floating* and *Spotlight*, then adjust padding, radius and shadow: the recording keeps its shape inside the background.
+- [ ] Switch between 16:9, 9:16, 1:1 and Custom (e.g. 1080×1350): the preview changes shape, and nothing leaves the frame. Export and check the file's size.
+
+**Camera**
+- [ ] With the Camera panel open, drag the bubble around and resize it from its corner: it never leaves the frame, even after changing the canvas size.
+- [ ] Rounded shape with a wider proportion, a thick white border, a shadow and a coloured ring. Export: it looks the same.
+
+**Audio**
+- [ ] Add a song, fade it in over 3 s and out over 3 s, and click **End with the video**. Lower the music to 30 % and play: your voice stays clear, and the fades are heard. Export: the same.
+- [ ] Mute the captured audio and unmute the microphone track: only the microphone is heard.
+
+**Subtitles**
+- [ ] Add three subtitles by hand, one with two lines; set start and end with the playhead buttons; change font, size, colour, box and position.
+- [ ] **Generate subtitles** from the microphone on a recording where you speak: the model downloads once (progress shown), the cues appear, and you can correct them. Cancel one run half-way: nothing changes. Try it offline the first time: a clear error, nothing changed.
+- [ ] Download the `.srt` and open it in a video player next to the export.
+
+**Overlays**
+- [ ] Add a text watermark and a logo; move the logo with **Position**, lower its opacity, and shorten it on the timeline.
+- [ ] Add a callout and point its arrow at something in the recording.
+
+**Persistence**
+- [ ] Close the editor and reopen the project: background, layout, size, camera style, volumes, fades, subtitles and their style, watermarks and callouts are all as you left them, in the preview and in a new export.
+
+## Module 09 test checklist
+
+Automated: `npm test` (226 unit tests) and `npm run test:e2e` (50 end-to-end tests). Manual checks:
+
+**Summary and settings**
+- [ ] Open **Export video** and switch between MP4, WebM, GIF, PNG and JPEG: the settings change with the format, and the summary (codecs, size, frame rate, length, bitrate, audio, estimated size, file name, destination) follows every change.
+- [ ] Change the aspect ratio in the dialog: the preview behind it changes too.
+
+**MP4 and WebM**
+- [ ] Export a recording with zoom effects, an image, a PDF page, a subtitle, a watermark and music as MP4. Play it in the system player (Windows Media Player / QuickTime / VLC): everything is there, in the right order, with the sound in sync. Its properties say H.264 and AAC.
+- [ ] Export at 720p 60 fps, low quality, then at a custom 20 Mbps: sizes differ as the summary predicts (screen recordings usually come out smaller).
+- [ ] Export as WebM and compare.
+
+**GIF**
+- [ ] Export 3 seconds around a zoom as a 480 px GIF at 10 fps: it animates in the browser and in an image viewer, and loops. Try 64 colours without dithering: smaller, banded.
+
+**Stills**
+- [ ] Move the playhead to a zoomed moment and click **Save this frame**: the PNG (and a JPEG) look exactly like the preview, at full resolution.
+
+**Saving and resources**
+- [ ] Choose **A file I choose**, pick a folder and export a long video: memory use (Task Manager) stays flat while the file grows. Cancel another one half-way: no broken file is left.
+- [ ] Click **Start export** twice quickly: one export runs. Start one in a second editor tab meanwhile: it says another export is running.
+- [ ] Press Esc (or **Cancel export**) during an export: it stops and says nothing was saved; the editor stays responsive throughout.

@@ -1,10 +1,12 @@
 import { clipAt, contentDuration, isStill } from '@/services/timeline/model';
 import type { Size } from '@/services/zoom/coordinates';
-import type { CameraLayout, MediaAssetKind, MediaClip, Timeline, TimelineTrack } from '@/types';
-import { activeVisuals, contentRect } from './compose';
+import type { BackgroundStyle, CameraLayout, FrameLayout, MediaAssetKind, MediaClip, SubtitleStyle, SubtitleTrack, Timeline, TimelineTrack } from '@/types';
+import { activeVisuals } from './compose';
+import { activeCues, layoutRect } from './enhancements';
 import { drawFrame, type FrameImage } from './draw';
 import { frameStateAt, type FrameState, type RenderScene } from './frameState';
 import { StillCache } from './stills';
+import { clipGain } from './audioMix';
 
 /** What the player shows; replaced as a whole whenever the project changes. */
 export interface PlayerContent {
@@ -18,6 +20,13 @@ export interface PlayerContent {
   aspect: number;
   /** Playable URL and kind of every asset on the timeline (and the size of images). */
   assets: ReadonlyMap<string, { url: string; kind: MediaAssetKind; width?: number; height?: number }>;
+  /** Module 08: background, the recording's layout on it, and subtitles. */
+  enhancements?: {
+    background: BackgroundStyle;
+    frameLayout: FrameLayout;
+    subtitleStyle: SubtitleStyle;
+    subtitles: readonly SubtitleTrack[];
+  };
 }
 
 interface TrackSlot {
@@ -268,7 +277,8 @@ export class TimelinePlayer {
     element.playbackRate = this.rate;
     const silent = this.allMuted || track.kind === 'camera' || track.muted || clip.muted;
     element.muted = Boolean(silent);
-    element.volume = Math.min(1, Math.max(0, clip.volume ?? 1));
+    // Clip and track volume and fades, updated every frame while playing (see audioMix.ts).
+    element.volume = clipGain({ ...clip, muted: false }, { volume: track.volume }, time);
     return element;
   }
 
@@ -315,11 +325,29 @@ export class TimelinePlayer {
     this.invalidate();
   }
 
+  /** An imported background image, decoded at the canvas size (null until ready, or without one). */
+  private backgroundImage(width: number, height: number): FrameImage | null {
+    const background = this.content?.enhancements?.background;
+    if (background?.kind !== 'image' || !background.imageAssetId) return null;
+    const asset = this.content!.assets.get(background.imageAssetId);
+    if (!asset) return null;
+    const bitmap = this.stills.peek(
+      {
+        assetId: background.imageAssetId,
+        kind: 'image',
+        size: asset.width && asset.height ? { width: asset.width, height: asset.height } : undefined,
+        load: () => fetch(asset.url).then((response) => response.blob()),
+      },
+      { width, height },
+    );
+    return bitmap ? { image: bitmap, width: bitmap.width, height: bitmap.height } : null;
+  }
+
   private frameImageFor(track: TimelineTrack, clip: MediaClip): FrameImage | null {
     const asset = this.content!.assets.get(clip.assetId);
     if (!asset) return null;
     if (isStill(asset)) {
-      const content = contentRect({ width: this.canvas.width, height: this.canvas.height }, this.content!.source);
+      const content = layoutRect({ width: this.canvas.width, height: this.canvas.height }, this.content!.source, this.content!.enhancements?.frameLayout);
       const bitmap = this.stills.peek(
         {
           assetId: clip.assetId,
@@ -330,13 +358,19 @@ export class TimelinePlayer {
         },
         content,
       );
-      return bitmap ? { image: bitmap, width: bitmap.width, height: bitmap.height } : null;
+      return bitmap ? { image: bitmap, width: bitmap.width, height: bitmap.height, transform: clip.transform, opacity: clip.opacity } : null;
     }
     const slot = this.slots.get(track.id);
     const element = slot?.element;
     if (!(element instanceof HTMLVideoElement) || slot!.assetId !== clip.assetId) return null;
     if (element.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || element.videoWidth === 0) return null;
-    return { image: element, width: element.videoWidth, height: element.videoHeight };
+    return {
+      image: element,
+      width: element.videoWidth,
+      height: element.videoHeight,
+      transform: track.kind === 'video' ? clip.transform : undefined,
+      opacity: track.kind === 'video' ? clip.opacity : undefined,
+    };
   }
 
   private draw(time: number) {
@@ -353,7 +387,12 @@ export class TimelinePlayer {
         camera: visuals.camera ? this.frameImageFor(visuals.camera.track, visuals.camera.clip) : null,
         cameraLayout: content.cameraLayout,
         texts: visuals.texts,
-        content: contentRect({ width, height }, content.source),
+        content: layoutRect({ width, height }, content.source, content.enhancements?.frameLayout),
+        background: content.enhancements ? { style: content.enhancements.background, image: this.backgroundImage(width, height) } : undefined,
+        frameLayout: content.enhancements?.frameLayout,
+        subtitles: content.enhancements
+          ? { lines: activeCues({ subtitles: [...content.enhancements.subtitles] }, time).map((cue) => cue.text), style: content.enhancements.subtitleStyle }
+          : undefined,
       },
       state,
     );

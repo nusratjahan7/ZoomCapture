@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
-import { aspectValue, contentRect, timelineScene } from '@/services/render/compose';
+import { aspectValue, timelineScene } from '@/services/render/compose';
+import { backgroundOf, frameLayoutOf, layoutRect, subtitleStyleOf } from '@/services/render/enhancements';
+import { textLayout } from '@/services/render/draw';
 import type { FrameState } from '@/services/render/frameState';
 import { TimelinePlayer } from '@/services/render/TimelinePlayer';
 import { findClip } from '@/services/timeline/model';
-import { updateTextClip } from '@/services/timeline/operations';
+import { setClipTransform, updateTextClip } from '@/services/timeline/operations';
+import { clampTransform } from '@/services/render/clipFrame';
 import { updateMarker } from '@/services/zoom/markers';
 import type { NormalizedPoint, TextClip } from '@/types';
+import { cn } from '@/utils/cn';
 import { formatTimecode, parseTimecode, useEditor, useEditorState, usePlayheadListener } from '../state/EditorContext';
+import { CameraHandle } from './CameraHandle';
+import { ClipFrameOverlay } from './ClipFrameOverlay';
 import { FramingOverlay } from './FramingOverlay';
 import type { AssetUrls } from './useAssetUrls';
 
@@ -16,6 +22,8 @@ export interface PreviewOptions {
   previewZoom: boolean;
   /** Dragging the selected zoom effect's focus point. */
   framing: boolean;
+  /** Moving, resizing and cropping the selected clip's picture. */
+  clipFraming: boolean;
   speed: number;
 }
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
@@ -24,16 +32,31 @@ const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
  * The edited timeline drawn on a canvas by the rendering engine, with direct manipulation of the
  * selected item (zoom framing, text position). The transport lives in the control bar.
  */
-export function PreviewPane({ urls, options, onFramingChange }: { urls: AssetUrls; options: PreviewOptions; onFramingChange: (on: boolean) => void }) {
-  const { store, recording, player, setPlayer } = useEditor();
+export function PreviewPane({
+  urls,
+  options,
+  onOptionsChange,
+  cameraEditing = false,
+}: {
+  urls: AssetUrls;
+  options: PreviewOptions;
+  onOptionsChange: (patch: Partial<PreviewOptions>) => void;
+  /** The Camera panel is open: show a handle to move and resize the bubble. */
+  cameraEditing?: boolean;
+}) {
+  const { store, recording, player, setPlayer, assets } = useEditor();
   const project = useEditorState((snapshot) => snapshot.project);
   const selection = useEditorState((snapshot) => snapshot.selection);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
-  const { previewZoom, framing, speed } = options;
+  const { previewZoom, framing, clipFraming, speed } = options;
 
   const source = useMemo(() => ({ width: recording.width ?? 1920, height: recording.height ?? 1080 }), [recording.width, recording.height]);
-  const aspect = aspectValue(project.aspectRatio, source);
+  const aspect = aspectValue(project.aspectRatio, source, project.customSize);
+  const enhancements = useMemo(
+    () => ({ background: backgroundOf(project), frameLayout: frameLayoutOf(project), subtitleStyle: subtitleStyleOf(project), subtitles: project.subtitles }),
+    [project.background, project.frameLayout, project.subtitleStyle, project.subtitles],
+  );
   const scene = useMemo(() => timelineScene(project, recording), [project.timeline, project.renderEffects, recording]);
   const selectedMarker = selection.length === 1 ? (project.timeline.zoomMarkers.find((marker) => marker.id === selection[0]) ?? null) : null;
   const selectedText = useMemo(() => {
@@ -41,8 +64,21 @@ export function PreviewPane({ urls, options, onFramingChange }: { urls: AssetUrl
     const clip = findClip(project.timeline, selection[0]!)?.clip;
     return clip?.type === 'text' ? clip : null;
   }, [project.timeline, selection]);
-  const content = contentRect({ width: aspect, height: 1 }, source);
-  const showZoom = previewZoom && !framing;
+  // Where the recording sits in the frame (inside its padding on a background), in frame-height units.
+  const content = layoutRect({ width: aspect, height: 1 }, source, enhancements.frameLayout);
+  // The selected clip's picture, when it can be moved and cropped (a clip on a video track).
+  const selectedPicture = useMemo(() => {
+    if (selection.length !== 1) return null;
+    const found = findClip(project.timeline, selection[0]!);
+    if (!found || found.track.kind !== 'video' || found.clip.type !== 'media') return null;
+    const assetId = found.clip.assetId;
+    const asset = assets.find((candidate) => candidate.id === assetId);
+    const size = asset?.width && asset.height ? { width: asset.width, height: asset.height } : source;
+    return { clip: found.clip, size };
+  }, [project.timeline, selection, assets, source]);
+  const editingPicture = clipFraming && selectedPicture !== null;
+  // Zoom is shown off while positioning, so the handles match the picture.
+  const showZoom = previewZoom && !framing && !editingPicture;
   const stageRef = useRef<HTMLDivElement>(null);
   const box = useFittedBox(stageRef, aspect);
 
@@ -65,13 +101,16 @@ export function PreviewPane({ urls, options, onFramingChange }: { urls: AssetUrl
   }, [setPlayer]);
 
   useEffect(() => {
-    player?.setContent({ timeline: project.timeline, scene, zoom: showZoom, cameraLayout: project.cameraLayout, source, aspect, assets: urls });
-  }, [player, project.timeline, project.cameraLayout, scene, showZoom, source, aspect, urls]);
+    player?.setContent({ timeline: project.timeline, scene, zoom: showZoom, cameraLayout: project.cameraLayout, source, aspect, assets: urls, enhancements });
+  }, [player, project.timeline, project.cameraLayout, scene, showZoom, source, aspect, urls, enhancements]);
 
   useEffect(() => player?.setRate(speed), [player, speed]);
   useEffect(() => {
-    if (!selectedMarker && framing) onFramingChange(false);
-  }, [selectedMarker, framing, onFramingChange]);
+    if (!selectedMarker && framing) onOptionsChange({ framing: false });
+  }, [selectedMarker, framing, onOptionsChange]);
+  useEffect(() => {
+    if (!selectedPicture && clipFraming) onOptionsChange({ clipFraming: false });
+  }, [selectedPicture, clipFraming, onOptionsChange]);
 
   const moveMarker = (position: NormalizedPoint) => {
     if (!selectedMarker) return;
@@ -102,6 +141,38 @@ export function PreviewPane({ urls, options, onFramingChange }: { urls: AssetUrl
             >
               <FramingOverlay marker={selectedMarker} onCommit={moveMarker} />
             </div>
+          )}
+          {editingPicture && selectedPicture && (
+            <div
+              className="absolute"
+              style={{ left: `${(content.x / aspect) * 100}%`, top: `${content.y * 100}%`, width: `${(content.width / aspect) * 100}%`, height: `${content.height * 100}%` }}
+            >
+              <ClipFrameOverlay
+                clip={selectedPicture.clip}
+                source={selectedPicture.size}
+                frameAspect={content.width / content.height}
+                onChange={(transform, done) =>
+                  store.edit(
+                    transform ? 'Move picture' : 'Reset picture',
+                    (current) => ({
+                      ...current,
+                      timeline: setClipTransform(current.timeline, selectedPicture.clip.id, transform && clampTransform(transform, selectedPicture.size, content.width / content.height)),
+                    }),
+                    { mergeKey: done ? undefined : `picture:${selectedPicture.clip.id}` },
+                  )
+                }
+                onDone={() => onOptionsChange({ clipFraming: false })}
+              />
+            </div>
+          )}
+          {cameraEditing && project.cameraLayout && (
+            <CameraHandle
+              layout={project.cameraLayout}
+              frameAspect={aspect}
+              onChange={(cameraLayout, done) =>
+                store.edit('Move camera', (current) => ({ ...current, cameraLayout }), { mergeKey: done ? undefined : 'move-camera' })
+              }
+            />
           )}
           {selectedText && !framing && (
             <TextHandle
@@ -186,9 +257,31 @@ export function Timecode() {
   );
 }
 
-/** Dashed box over the selected text; drag it (or use the arrow keys) to move the text. */
+let measure: CanvasRenderingContext2D | null = null;
+
+/**
+ * Dashed outline around the selected text (measured as the preview draws it, so the text itself
+ * stays visible); drag it, or use the arrow keys, to move the text.
+ */
 function TextHandle({ clip, onMove }: { clip: TextClip; onMove: (position: NormalizedPoint, done: boolean) => void }) {
   const dragging = useRef<{ dx: number; dy: number } | null>(null);
+  const ref = useRef<HTMLButtonElement>(null);
+  // The frame's size in CSS pixels: the text box is laid out the same way, relative to it.
+  const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const parent = ref.current?.parentElement;
+    if (!parent) return;
+    const observer = new ResizeObserver(() => setFrame({ width: parent.clientWidth, height: parent.clientHeight }));
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, []);
+  const box = useMemo(() => {
+    if (!frame || frame.width === 0) return null;
+    measure ??= document.createElement('canvas').getContext('2d');
+    if (!measure || !clip.text.trim()) return null;
+    const layout = textLayout(measure, frame.width, frame.height, clip);
+    return { left: layout.cx - layout.boxWidth / 2, top: layout.cy - layout.boxHeight / 2, width: layout.boxWidth, height: layout.boxHeight };
+  }, [frame, clip]);
   const pointIn = (event: PointerEvent<HTMLElement>) => {
     const frame = event.currentTarget.parentElement!.getBoundingClientRect();
     return { x: (event.clientX - frame.left) / frame.width, y: (event.clientY - frame.top) / frame.height };
@@ -203,11 +296,17 @@ function TextHandle({ clip, onMove }: { clip: TextClip; onMove: (position: Norma
   };
   return (
     <button
+      ref={ref}
       type="button"
       aria-label={`Text “${clip.text}”: drag or use the arrow keys to move it`}
+      title="Drag to move the text"
       data-testid="text-handle"
-      className="absolute -translate-x-1/2 -translate-y-1/2 cursor-move touch-none rounded-md border-2 border-dashed border-accent-2 bg-accent-2/10 px-3 py-1 text-[11px] font-medium text-white shadow focus-visible:outline-2"
-      style={{ left: `${clip.position.x * 100}%`, top: `${clip.position.y * 100}%` }}
+      className={cn(
+        'absolute cursor-move touch-none rounded-md border-2 border-dashed border-accent-2 focus-visible:outline-2',
+        // Before it is measured (or for empty text): a small target at the text's position.
+        !box && 'size-6 -translate-x-1/2 -translate-y-1/2',
+      )}
+      style={box ? { left: box.left - 3, top: box.top - 3, width: box.width + 6, height: box.height + 6 } : { left: `${clip.position.x * 100}%`, top: `${clip.position.y * 100}%` }}
       onPointerDown={(event) => {
         const point = pointIn(event);
         dragging.current = { dx: clip.position.x - point.x, dy: clip.position.y - point.y };
@@ -222,8 +321,6 @@ function TextHandle({ clip, onMove }: { clip: TextClip; onMove: (position: Norma
         dragging.current = null;
       }}
       onKeyDown={onKeyDown}
-    >
-      Move text
-    </button>
+    />
   );
 }

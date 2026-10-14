@@ -1,12 +1,13 @@
 // Module 07 end-to-end tests: importing PDFs, images and audio (browse and drag and drop), PDF
 // page selection, invalid and duplicate files, voiceover (imported and recorded) over still pages,
+// moving, resizing and cropping a clip's picture,
 // playback sync, persistence after reopening, and exporting the mixed timeline.
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makePdf, makeWav } from '../fixtures/makePdf.mjs';
-import { button, dialogButton, openPanel, readRecordings, recordClip, seekEditor, sleep, waitForText, waitSaved } from './lib.mjs';
+import { button, dialogButton, openPanel, readRecordings, recordClip, seekEditor, sleep, waitForText, startExport, waitSaved } from './lib.mjs';
 
 /** Page colours of the test PDF: red, green, blue, yellow. */
 const PAGES = [
@@ -227,13 +228,65 @@ export async function runModule07(test, getEnv, relaunch) {
     assert.equal(project.importedAssetIds.length, 4);
   });
 
+  await test('module 07 position: a clip’s picture moved, resized and cropped in the preview', async () => {
+    const { editor, recording } = state;
+    let project = await readProject(editor, recording.projectId);
+    const image = allClips(project).find((clip) => clip.trackKind === 'video' && !clip.page && project.timeline.tracks.some((t) => t.clips.some((c) => c.id === clip.id && c.assetId !== recording.screenAssetId)));
+    await seekEditor(editor, image.startMs + 500);
+    await editor.click(`[data-clip-id="${image.id}"] button`);
+    await (await editor.waitForSelector('button[aria-label^="Position"]')).click();
+    const box = await (await editor.waitForSelector('[data-testid=clip-frame-box]')).boundingBox();
+    const frame = await (await editor.$('[data-testid=clip-frame]')).boundingBox();
+    // Shrink from the bottom-right corner to about a third of the width, then drag it to the top-left.
+    const corner = await (await editor.$('[data-testid=clip-frame-box] [data-handle="bottom-right"]')).boundingBox();
+    await editor.mouse.move(corner.x + corner.width / 2, corner.y + corner.height / 2);
+    await editor.mouse.down();
+    await editor.mouse.move(box.x + frame.width / 3, box.y + frame.height / 3, { steps: 6 });
+    await editor.mouse.up();
+    const small = await (await editor.$('[data-testid=clip-frame-box]')).boundingBox();
+    await editor.mouse.move(small.x + small.width / 2, small.y + small.height / 2);
+    await editor.mouse.down();
+    await editor.mouse.move(frame.x + small.width / 2 + 4, frame.y + small.height / 2 + 4, { steps: 6 });
+    await editor.mouse.up();
+    // Crop: the right edge, a quarter of the picture.
+    await (await button(editor, 'Crop')).click();
+    const edge = await (await editor.$('[data-testid=clip-frame-box] [data-handle="right"]')).boundingBox();
+    const placed = await (await editor.$('[data-testid=clip-frame-box]')).boundingBox();
+    await editor.mouse.move(edge.x + edge.width / 2, edge.y + edge.height / 2);
+    await editor.mouse.down();
+    await editor.mouse.move(edge.x + edge.width / 2 - placed.width / 4, edge.y + edge.height / 2, { steps: 4 });
+    await editor.mouse.up();
+    await waitSaved(editor);
+
+    project = await readProject(editor, recording.projectId);
+    const { transform } = allClips(project).find((clip) => clip.id === image.id);
+    assert.ok(transform, 'transform saved');
+    assert.ok(transform.x < 0.03 && transform.y < 0.03, `moved to the top-left: ${JSON.stringify(transform)}`);
+    assert.ok(transform.width > 0.18 && transform.width < 0.32, `about a third, minus the crop: ${transform.width}`);
+    assert.ok(Math.abs(transform.crop.right - 0.25) < 0.05 && transform.crop.left === 0, `right edge cropped: ${JSON.stringify(transform.crop)}`);
+    // One undo step per drag; Done hides the handles and shows zoom again.
+    await (await button(editor, 'Done')).click();
+    assert.equal(await editor.$('[data-testid=clip-frame]'), null);
+    // The preview draws it there: magenta in the top-left, the screen recording in the middle.
+    const colours = await editor.evaluate(async () => {
+      for (let i = 0; i < 4; i++) await new Promise((r) => requestAnimationFrame(r));
+      const canvas = document.querySelector('[data-testid=zoom-canvas]');
+      const ctx = canvas.getContext('2d');
+      const at = (x, y) => Array.from(ctx.getImageData(Math.round(canvas.width * x), Math.round(canvas.height * y), 1, 1).data.slice(0, 3));
+      return { corner: at(0.08, 0.08), middle: at(0.5, 0.5) };
+    });
+    assert.ok(near(colours.corner, [255, 0, 255], 40), `picture in the corner: ${colours.corner}`);
+    assert.ok(!near(colours.middle, [255, 0, 255], 80), `not in the middle any more: ${colours.middle}`);
+    state.imageStartMs = image.startMs;
+  });
+
   await test('module 07 export: pages, image and voiceover in the rendered video', async () => {
     const { editor, voiceStartMs } = state;
     // Only the voiceovers are heard (the screen recording's own test sound would come first).
     await editor.click('button[aria-label="Mute Screen"]');
     await waitSaved(editor);
     await (await button(editor, 'Export video')).click();
-    await (await dialogButton(editor, 'Render')).click();
+    await startExport(editor);
     await editor.waitForSelector('[data-testid=rendered-video]', { timeout: 120_000 });
     await editor.waitForFunction(() => document.querySelector('[data-testid=rendered-video]').readyState >= 1);
     assert.match(await editor.$eval('[data-testid=render-summary]', (p) => p.textContent), /audio mixed/);
@@ -245,6 +298,8 @@ export async function runModule07(test, getEnv, relaunch) {
           video.addEventListener('seeked', resolve, { once: true });
           video.currentTime = t;
         });
+        // Chrome paints an H.264 frame a moment after 'seeked': wait for it.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
@@ -253,8 +308,23 @@ export async function runModule07(test, getEnv, relaunch) {
         for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) sum[c] += data[i + c];
         return sum.map((value) => Math.round(value / (data.length / 4)));
       }, t);
-    assert.ok(near(await colourAt(1), PAGES[0], 60), 'page 1 in the video');
+    { const c1 = await colourAt(1); assert.ok(near(c1, PAGES[0], 60), `page 1 in the video: ${c1} vs ${PAGES[0]}`); }
     assert.ok(near(await colourAt(3), PAGES[2], 60), 'page 3 in the video');
+    // The moved, cropped image: in the top-left corner of the video.
+    const corner = await editor.evaluate(async (t) => {
+      const video = document.querySelector('[data-testid=rendered-video]');
+      await new Promise((resolve) => {
+        video.addEventListener('seeked', resolve, { once: true });
+        video.currentTime = t;
+      });
+      // Chrome paints an H.264 frame a moment after 'seeked': wait for it.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      return Array.from(ctx.getImageData(Math.round(canvas.width * 0.08), Math.round(canvas.height * 0.08), 1, 1).data.slice(0, 3));
+    }, state.imageStartMs / 1000 + 1);
+    assert.ok(near(corner, [255, 0, 255], 60), `moved image in the video: ${corner}`);
     // The voiceover (a tone from its first sample) starts where it was placed.
     const onset = await editor.evaluate(async () => {
       const blob = await (await fetch(document.querySelector('[data-testid=rendered-video]').src)).blob();

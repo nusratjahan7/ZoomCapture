@@ -52,7 +52,7 @@ describe('saving a completed recording', () => {
 
     // The editable project is prepared for later modules and does not duplicate recording facts.
     expect(project).toMatchObject({ schemaVersion: 3, aspectRatio: 'source', subtitles: [], importedAssetIds: [] });
-    expect(project.exportSettings.format).toBe('webm');
+    expect(project.exportSettings.format).toBe('mp4');
     expect(project.timeline.tracks.map((t) => t.name)).toEqual(['Screen', 'Camera', 'Microphone']);
     expect('name' in project).toBe(false);
 
