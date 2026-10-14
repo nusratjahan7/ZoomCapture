@@ -24,7 +24,7 @@ interface Session {
  * track where you started. It is stored with the project like an imported audio file, so it can
  * be trimmed, moved and mixed like any other clip, and it keeps playing over images and PDF pages.
  */
-export function VoiceoverRecorder() {
+export function VoiceoverRecorder({ keepTab }: { keepTab?: () => void }) {
   const { store, player, assets, reportError } = useEditor();
   const { importFiles } = useImportFiles();
   const [state, setState] = useState<'idle' | 'starting' | 'recording' | 'saving'>('idle');
@@ -97,7 +97,8 @@ export function VoiceoverRecorder() {
       }
       const count = assets.filter((asset) => asset.voiceover).length + 1;
       const file = new File([blob], `Voiceover ${count}.${type.includes('mp4') ? 'm4a' : 'webm'}`, { type: type.split(';')[0], lastModified: Date.now() });
-      await importFiles([file], { timeMs: current.startMs, trackId }, { voiceover: true });
+      // The new clip is selected, but the Media panel stays open.
+      await importFiles([file], { timeMs: current.startMs, trackId }, { voiceover: true, beforePlace: keepTab });
     } catch (error) {
       reportError(error instanceof Error ? error.message : String(error));
     } finally {

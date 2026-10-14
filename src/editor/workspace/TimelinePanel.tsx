@@ -682,7 +682,8 @@ function FilmstripTiles({ strip, sourceStartMs, msPerPx, width, height }: { stri
 function StillTiles({ asset, page, width, height }: { asset: MediaAsset; page: number; width: number; height: number }) {
   const url = useThumbnail(asset, page);
   if (!url) return null;
-  const ratio = asset.kind === 'pdf' ? 0.75 : asset.width && asset.height ? asset.width / asset.height : 16 / 9;
+  // The file's own shape (for a PDF, its first page's); portrait pages if unknown.
+  const ratio = asset.width && asset.height ? asset.width / asset.height : asset.kind === 'pdf' ? 0.75 : 16 / 9;
   const tileWidth = Math.max(24, Math.round(height * ratio));
   const count = Math.min(120, Math.ceil(width / tileWidth));
   return (

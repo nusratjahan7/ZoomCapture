@@ -1,0 +1,277 @@
+/**
+ * Module 07: importing (file checks, PDFs, duplicates), PDF pages and other stills on the
+ * timeline, mixed media, voiceover timing, and how zoom effects follow their clips.
+ */
+import { describe, expect, it, beforeAll } from 'vitest';
+import { checkSize, classifyFile, fingerprint, IMPORT_LIMITS, sniffType } from '@/services/media/importFiles';
+import { PdfError, probePdf, setPdfLibraryLoader } from '@/services/media/pdf';
+import { UnsupportedMediaError } from '@/services/media/probe';
+import { activeVisuals, timelineScene } from '@/services/render/compose';
+import { audibleClips, audioPlacement } from '@/services/render/renderVideo';
+import { finalizeDraft } from '@/services/recording/finalizeRecording';
+import { getAssetBlob } from '@/services/storage/assetRepository';
+import { getProject, importProjectAsset } from '@/services/storage/projectRepository';
+import { activeMarkers, clipForNewMarker, markerClipId, updateMarkerOnTimeline } from '@/services/timeline/attachment';
+import { clipEnd, DEFAULT_STILL_MS, sourceTimeAt } from '@/services/timeline/model';
+import {
+  addMediaClip,
+  addPdfPages,
+  deleteItems,
+  duplicateClip,
+  moveClip,
+  setClipTiming,
+  splitClip,
+  trimClip,
+  TimelineEditError,
+  updateMediaClip,
+  type AssetLookup,
+} from '@/services/timeline/operations';
+import type { MediaAsset, MediaClip, Timeline, TimelineTrack, ZoomMarker } from '@/types';
+import { makePdf, makeWav } from '../fixtures/makePdf.mjs';
+import { SCREEN, seedDraft } from './helpers';
+
+beforeAll(() => {
+  // The browser build of pdf.js needs a DOM; Node uses its legacy build.
+  setPdfLibraryLoader(() => import('pdfjs-dist/legacy/build/pdf.mjs') as never);
+});
+
+const asset = (id: string, kind: MediaAsset['kind'], extra: Partial<MediaAsset> = {}): MediaAsset => ({
+  id,
+  kind,
+  origin: kind === 'screen' || kind === 'microphone' ? 'recording' : 'import',
+  mimeType: 'application/octet-stream',
+  size: 1,
+  startOffsetMs: 0,
+  createdAt: 0,
+  ...extra,
+});
+const ASSETS = new Map<string, MediaAsset>([
+  ['screen', asset('screen', 'screen', { durationMs: 20_000, hasAudio: true })],
+  ['deck', asset('deck', 'pdf', { pageCount: 4, hasAudio: false })],
+  ['logo', asset('logo', 'image', { width: 800, height: 600, hasAudio: false })],
+  ['intro', asset('intro', 'video', { durationMs: 3000, hasAudio: true })],
+  ['voice', asset('voice', 'audio', { durationMs: 12_000, hasAudio: true, voiceover: true })],
+]);
+const lookup: AssetLookup = (id) => ASSETS.get(id);
+const media = (id: string, assetId: string, startMs: number, durationMs: number, extra: Partial<MediaClip> = {}): MediaClip => ({
+  id,
+  type: 'media',
+  assetId,
+  startMs,
+  sourceInMs: 0,
+  sourceOutMs: durationMs,
+  ...extra,
+});
+const track = (id: string, kind: TimelineTrack['kind'], clips: MediaClip[]): TimelineTrack => ({ id, kind, name: id, clips });
+const timelineOf = (tracks: TimelineTrack[], zoomMarkers: ZoomMarker[] = []): Timeline => ({ tracks, zoomMarkers, durationMs: 20_000 });
+const marker = (id: string, timeMs: number, clipId?: string): ZoomMarker => ({
+  id,
+  timeMs,
+  clipId,
+  position: { x: 0.5, y: 0.5 },
+  scale: 2,
+  durationMs: 1000,
+  transitionMs: 300,
+  positionMode: 'fixed',
+  effect: 'zoom',
+  enabled: true,
+  origin: 'auto',
+  createdAt: 0,
+  updatedAt: 0,
+});
+const bytes = (...values: Array<number | string>) =>
+  new Uint8Array(values.flatMap((value) => (typeof value === 'string' ? [...value].map((ch) => ch.charCodeAt(0)) : [value])));
+const file = (data: Uint8Array | string, name: string, type = '') => Object.assign(new Blob([data as BlobPart], { type }), { name, lastModified: 1 });
+
+describe('checking imported files', () => {
+  it('tells what a file is from its contents, not its name', () => {
+    expect(sniffType(makePdf([[255, 0, 0]]))).toEqual({ kind: 'pdf', mimeType: 'application/pdf' });
+    expect(sniffType(bytes(0x89, 'PNG', 0x0d, 0x0a, 0x1a, 0x0a))).toEqual({ kind: 'image', mimeType: 'image/png' });
+    expect(sniffType(bytes(0xff, 0xd8, 0xff, 0xe0))).toEqual({ kind: 'image', mimeType: 'image/jpeg' });
+    expect(sniffType(bytes('RIFF', 0, 0, 0, 0, 'WEBP'))).toEqual({ kind: 'image', mimeType: 'image/webp' });
+    expect(sniffType(bytes(0, 0, 0, 0x20, 'ftypisom'))).toEqual({ kind: 'video', mimeType: 'video/mp4' });
+    expect(sniffType(bytes(0, 0, 0, 0x20, 'ftypM4A '))).toEqual({ kind: 'audio', mimeType: 'audio/mp4' });
+    expect(sniffType(bytes(0x1a, 0x45, 0xdf, 0xa3))).toEqual({ kind: 'video', mimeType: 'video/webm' });
+    expect(sniffType(bytes(0x1a, 0x45, 0xdf, 0xa3), 'audio/webm')).toEqual({ kind: 'audio', mimeType: 'audio/webm' });
+    expect(sniffType(makeWav(0.1))).toEqual({ kind: 'audio', mimeType: 'audio/wav' });
+    expect(sniffType(bytes('ID3', 4, 0))).toEqual({ kind: 'audio', mimeType: 'audio/mpeg' });
+    expect(sniffType(bytes('hello world, not media'))).toBeNull();
+  });
+
+  it('refuses empty, unknown, misnamed and unplayable files with a reason', async () => {
+    await expect(classifyFile(file(new Uint8Array(), 'empty.mp4', 'video/mp4'))).rejects.toThrow(/empty/);
+    await expect(classifyFile(file('just some text', 'notes.txt', 'text/plain'))).rejects.toThrow(/Only video, audio, image and PDF/);
+    await expect(classifyFile(file('not really a video', 'clip.mp4', 'video/mp4'))).rejects.toThrow(/damaged, or it isn’t really/);
+    await expect(classifyFile(file('<svg xmlns="http://www.w3.org/2000/svg"/>', 'logo.svg', 'image/svg+xml'))).rejects.toThrow(/SVG/);
+    await expect(classifyFile(file(bytes('RIFF', 0, 0, 0, 0, 'AVI LIST'), 'old.avi', 'video/x-msvideo'))).rejects.toThrow(/AVI videos can’t be played/);
+    // A PDF named .png is still a PDF.
+    await expect(classifyFile(file(makePdf([[0, 0, 0]]), 'scan.png', 'image/png'))).resolves.toEqual({ kind: 'pdf', mimeType: 'application/pdf' });
+    await expect(classifyFile(file(bytes('nothing'), 'x.png', 'image/png'))).rejects.toBeInstanceOf(UnsupportedMediaError);
+  });
+
+  it('refuses files over the size limit for their kind', async () => {
+    const big = (size: number) => ({ size }) as Blob;
+    await expect(checkSize(big(IMPORT_LIMITS.video + 1), 'video')).rejects.toThrow(/Videos up to 2 GB/);
+    await expect(checkSize(big(IMPORT_LIMITS.image + 1), 'image')).rejects.toThrow(/Images up to 50 MB/);
+    await expect(checkSize(big(IMPORT_LIMITS.pdf + 1), 'pdf')).rejects.toThrow(/PDFs up to 200 MB/);
+    await expect(checkSize(big(IMPORT_LIMITS.audio), 'audio')).resolves.toBeUndefined();
+  });
+
+  it('fingerprints files, so the same file is recognised', async () => {
+    const a = await fingerprint(file(makeWav(0.5), 'a.wav'));
+    expect(await fingerprint(file(makeWav(0.5), 'renamed.wav'))).toBe(a);
+    expect(await fingerprint(file(makeWav(0.6), 'a.wav'))).not.toBe(a);
+  });
+});
+
+describe('PDF documents', () => {
+  it('reads the number of pages and the page size of a multi-page PDF', async () => {
+    const info = await probePdf(new Blob([makePdf([[255, 0, 0], [0, 200, 0], [0, 0, 255]], { width: 960, height: 540 })]));
+    expect(info).toEqual({ pageCount: 3, width: 960, height: 540 });
+  });
+
+  it('refuses damaged files and files that only claim to be PDFs', async () => {
+    await expect(probePdf(new Blob(['%PDF-1.4 this is not a real document']))).rejects.toThrow(PdfError);
+    await expect(probePdf(new Blob(['%PDF-1.4 this is not a real document']))).rejects.toThrow(/not a valid PDF, or it is damaged/);
+  });
+
+  it('places selected pages one after another, each for the chosen time', () => {
+    const base = timelineOf([track('screen', 'video', [media('s', 'screen', 0, 4000)])]);
+    const { timeline, clipIds } = addPdfPages(base, ASSETS.get('deck')!, [1, 3, 4], 4000, 2500);
+    const clips = timeline.tracks.find((t) => t.id === 'screen')!.clips as MediaClip[];
+    expect(clipIds).toHaveLength(3);
+    expect(clips.slice(1).map((c) => [c.startMs, clipEnd(c), c.page, c.assetId])).toEqual([
+      [4000, 6500, 1, 'deck'],
+      [6500, 9000, 3, 'deck'],
+      [9000, 11_500, 4, 'deck'],
+    ]);
+    expect(timeline.durationMs).toBe(11_500);
+  });
+
+  it('puts pages on a new video track when there is no room, and refuses bad requests', () => {
+    const base = timelineOf([track('screen', 'video', [media('s', 'screen', 0, 20_000)])]);
+    const { timeline } = addPdfPages(base, ASSETS.get('deck')!, [2], 1000);
+    expect(timeline.tracks).toHaveLength(2);
+    expect((timeline.tracks[0]!.clips[0] as MediaClip).page).toBe(2);
+    expect(() => addPdfPages(base, ASSETS.get('deck')!, [5], 0)).toThrow(/no page 5/);
+    expect(() => addPdfPages(base, ASSETS.get('deck')!, [], 0)).toThrow(TimelineEditError);
+    expect(() => addPdfPages(base, ASSETS.get('logo')!, [1], 0)).toThrow(/Only PDF pages/);
+  });
+
+  it('lets a page be shown for any length, and its page changed', () => {
+    const base = timelineOf([track('slides', 'video', [media('p', 'deck', 0, DEFAULT_STILL_MS, { page: 1 })])]);
+    // Stills are not limited by a media length: stretched to 40 s.
+    const longer = setClipTiming(base, 'p', { durationMs: 40_000 }, lookup);
+    expect(clipEnd(longer.tracks[0]!.clips[0]!)).toBe(40_000);
+    const trimmed = trimClip(base, 'p', 'end', 30_000, lookup);
+    expect(clipEnd(trimmed.tracks[0]!.clips[0]!)).toBe(30_000);
+    expect((updateMediaClip(base, 'p', { page: 3 }).tracks[0]!.clips[0] as MediaClip).page).toBe(3);
+    expect(() => updateMediaClip(base, 'p', { page: 0 })).toThrow(/numbered from 1/);
+    // Images too.
+    const image = addMediaClip(timelineOf([]), ASSETS.get('logo')!, 0, undefined, { durationMs: 7000 });
+    expect(clipEnd(image.timeline.tracks[0]!.clips[0]!)).toBe(7000);
+  });
+});
+
+describe('mixed media and voiceover', () => {
+  // Screen 0-6 s, then PDF pages 6-16 s on top, an intro video, a voiceover from 4 s.
+  const mixed = timelineOf([
+    track('slides', 'video', [media('p1', 'deck', 6000, 5000, { page: 1 }), media('p2', 'deck', 11_000, 5000, { page: 2 })]),
+    track('overlay', 'video', [media('logo', 'logo', 0, 2000)]),
+    track('screen', 'video', [media('intro', 'intro', 0, 3000), media('s', 'screen', 3000, 3000)]),
+    track('voiceover', 'audio', [media('vo', 'voice', 4000, 12_000)]),
+  ]);
+
+  it('composes video, images and PDF pages as layers, top track on top', () => {
+    expect(activeVisuals(mixed, 1000).layers.map((layer) => layer.clip.id)).toEqual(['intro', 'logo']);
+    expect(activeVisuals(mixed, 4000).layers.map((layer) => layer.clip.id)).toEqual(['s']);
+    const page = activeVisuals(mixed, 12_000).layers;
+    expect(page.map((layer) => [layer.clip.id, (layer.clip as MediaClip).page])).toEqual([['p2', 2]]);
+  });
+
+  it('keeps the voiceover playing while a static page is shown', () => {
+    // At 12.5 s page 2 is on screen and the voiceover is 8.5 s in.
+    expect(activeVisuals(mixed, 12_500).layers[0]!.clip.id).toBe('p2');
+    const voiceover = mixed.tracks[3]!.clips[0] as MediaClip;
+    expect(sourceTimeAt(voiceover, 12_500)).toBe(8500);
+    // Heard in the export (stills have no sound; the intro video and the voiceover do).
+    expect(audibleClips(mixed, ASSETS).map(({ clip }) => clip.id).sort()).toEqual(['intro', 's', 'vo']);
+  });
+
+  it('places the voiceover at the same moment in the exported sound, across mixing windows', () => {
+    const long = { ...media('vo', 'voice', 25_000, 12_000), sourceInMs: 500, sourceOutMs: 12_500 };
+    // First 30 s window: starts 25 s in, from 0.5 s of the file, for 5 s.
+    expect(audioPlacement(long, 0, 30)).toEqual({ when: 25, offset: 0.5, duration: 5 });
+    // Next window continues exactly where it stopped: 5.5 s into the file, for the remaining 7 s.
+    expect(audioPlacement(long, 30, 60)).toEqual({ when: 0, offset: 5.5, duration: 7 });
+    expect(audioPlacement(long, 60, 90)).toBeNull();
+  });
+});
+
+describe('zoom effects follow their clips', () => {
+  const base = () =>
+    timelineOf(
+      [
+        track('overlay', 'video', [media('img', 'logo', 1000, 3000)]),
+        track('screen', 'video', [media('s', 'screen', 0, 10_000)]),
+      ],
+      [marker('auto', 2000, 's'), marker('legacy', 6000), marker('onImage', 2500, 'img')],
+    );
+
+  it('attaches new effects to the clip on screen, older ones to the lowest clip', () => {
+    const timeline = base();
+    expect(clipForNewMarker(timeline, 2000)).toBe('img');
+    expect(clipForNewMarker(timeline, 6000)).toBe('s');
+    expect(markerClipId(timeline, timeline.zoomMarkers.find((m) => m.id === 'legacy')!)).toBe('s');
+  });
+
+  it('moves effects with their clip only', () => {
+    // Moving the image does not take the screen's effect along (it sits over it in time).
+    const moved = moveClip(base(), 'img', { startMs: 12_000 }, lookup);
+    const times = Object.fromEntries(moved.zoomMarkers.map((m) => [m.id, m.timeMs]));
+    expect(times).toEqual({ auto: 2000, legacy: 6000, onImage: 13_500 });
+    // Moving the screen clip takes its own effects, including the older unattached one.
+    const screen = moveClip(base(), 's', { startMs: 1000 }, lookup);
+    expect(Object.fromEntries(screen.zoomMarkers.map((m) => [m.id, m.timeMs]))).toMatchObject({ auto: 3000, legacy: 7000, onImage: 2500 });
+  });
+
+  it('splitting gives later effects to the right part; duplicating copies them', () => {
+    const { timeline, rightId } = splitClip(base(), 's', 4000);
+    expect(timeline.zoomMarkers.find((m) => m.id === 'auto')!.clipId).toBe('s');
+    expect(timeline.zoomMarkers.find((m) => m.id === 'legacy')!.clipId).toBe(rightId);
+    const { timeline: copied, copyId } = duplicateClip(base(), 'img');
+    const copies = copied.zoomMarkers.filter((m) => m.clipId === copyId);
+    expect(copies.map((m) => m.timeMs)).toEqual([2500 + 3000]);
+  });
+
+  it('deletes effects with their clip, and only applies effects while their clip is on screen', () => {
+    expect(deleteItems(base(), ['img']).zoomMarkers.map((m) => m.id).sort()).toEqual(['auto', 'legacy']);
+    // Trimming the image so it ends at 2.2 s: its effect at 2.5 s no longer applies (and returns on undo).
+    const trimmed = trimClip(base(), 'img', 'end', 2200, lookup);
+    expect(activeMarkers(trimmed).map((m) => m.id).sort()).toEqual(['auto', 'legacy']);
+    expect(timelineScene({ timeline: trimmed, renderEffects: undefined }, { screenAssetId: 'screen', interactions: [], cursor: [] }).markers.map((m) => m.id)).not.toContain(
+      'onImage',
+    );
+    // Moving an effect attaches it to the clip on screen at its new time.
+    const retimed = updateMarkerOnTimeline(base(), 'onImage', { timeMs: 8000 });
+    expect(retimed.zoomMarkers.find((m) => m.id === 'onImage')!.clipId).toBe('s');
+  });
+});
+
+describe('storing imports', () => {
+  it('stores a file once per project: importing it again reuses the stored copy', async () => {
+    await seedDraft('ses_import', [SCREEN()], 4000);
+    const { project } = await finalizeDraft('ses_import');
+    const pdf = file(makePdf([[255, 0, 0], [0, 255, 0]]), 'Slides.pdf', 'application/pdf');
+    const details = { kind: 'pdf' as const, mimeType: 'application/pdf', info: { pageCount: 2, width: 960, height: 540 }, fingerprint: await fingerprint(pdf) };
+    const first = await importProjectAsset(project.id, pdf, details);
+    expect(first.reused).toBe(false);
+    expect(first.asset).toMatchObject({ kind: 'pdf', pageCount: 2, label: 'Slides.pdf', hasAudio: false });
+    const again = await importProjectAsset(project.id, pdf, details);
+    expect(again).toEqual({ asset: first.asset, reused: true });
+    expect((await getProject(project.id))!.importedAssetIds).toEqual([first.asset.id]);
+    // The original bytes are kept as they are.
+    const stored = await getAssetBlob(first.asset.id);
+    expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(new Uint8Array(await pdf.arrayBuffer()));
+  });
+});

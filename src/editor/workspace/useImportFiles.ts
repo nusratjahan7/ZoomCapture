@@ -33,7 +33,7 @@ export function useImportFiles() {
   const [importing, setImporting] = useState(0);
 
   const importFiles = useCallback(
-    async (files: readonly File[], placement?: Placement, options: { voiceover?: boolean } = {}): Promise<MediaAsset[]> => {
+    async (files: readonly File[], placement?: Placement, options: { voiceover?: boolean; beforePlace?: () => void } = {}): Promise<MediaAsset[]> => {
       if (files.length === 0) return [];
       setImporting((count) => count + files.length);
       const imported: MediaAsset[] = [];
@@ -47,7 +47,10 @@ export function useImportFiles() {
           addAssets([asset]);
           if (reused) toast.show({ title: `“${asset.label}” is already in this project`, description: 'The stored copy is used; it isn’t stored twice.' });
           else if (!placement) toast.show({ variant: 'success', title: `Imported “${asset.label}”`, description: 'Add it to the timeline with +, or drag it there.' });
-          if (at !== undefined) at = place(asset, at, placement?.trackId);
+          if (at !== undefined) {
+            options.beforePlace?.();
+            at = place(asset, at, placement?.trackId);
+          }
         } catch (error) {
           // A full disk gets the storage explanation; anything else (format, codec, size) its own message.
           const description = isQuotaError(error) ? describeStorageError(error) : getErrorMessage(error);

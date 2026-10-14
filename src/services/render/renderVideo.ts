@@ -184,6 +184,22 @@ export function audibleClips(timeline: Timeline, assets: ReadonlyMap<string, Med
  * Mixes the timeline's audio window by window with OfflineAudioContext and yields Opus-ready
  * samples. Returns null when nothing is audible.
  */
+/**
+ * Where a clip's sound goes in one mixing window (seconds): `when` in the window, from `offset`
+ * in its file, for `duration`. Null if the clip isn't heard in that window. A clip spanning two
+ * windows continues exactly where it stopped, so long voiceovers stay in sync.
+ */
+export function audioPlacement(clip: MediaClip, windowStart: number, windowEnd: number): { when: number; offset: number; duration: number } | null {
+  const start = clip.startMs / 1000;
+  const end = start + clipDuration(clip) / 1000;
+  if (end <= windowStart || start >= windowEnd) return null;
+  return {
+    when: Math.max(0, start - windowStart),
+    offset: clip.sourceInMs / 1000 + Math.max(0, windowStart - start),
+    duration: Math.min(end, windowEnd) - Math.max(start, windowStart),
+  };
+}
+
 async function prepareAudioMix(
   job: RenderJob,
   durationSeconds: number,
@@ -221,17 +237,14 @@ async function prepareAudioMix(
       for (const { clip } of clips) {
         const buffer = buffers.get(clip.assetId);
         if (!buffer) continue;
-        const start = clip.startMs / 1000;
-        const end = start + clipDuration(clip) / 1000;
-        if (end <= windowStart || start >= windowEnd) continue;
-        const offset = clip.sourceInMs / 1000 + Math.max(0, windowStart - start);
-        if (offset >= buffer.duration) continue;
+        const placement = audioPlacement(clip, windowStart, windowEnd);
+        if (!placement || placement.offset >= buffer.duration) continue;
         const node = context.createBufferSource();
         node.buffer = buffer;
         const gain = context.createGain();
         gain.gain.value = clip.volume ?? 1;
         node.connect(gain).connect(context.destination);
-        node.start(Math.max(0, start - windowStart), offset, Math.min(end, windowEnd) - Math.max(start, windowStart));
+        node.start(placement.when, placement.offset, placement.duration);
       }
       const mixed = await context.startRendering();
       const data = new Float32Array(mixed.length * CHANNELS);

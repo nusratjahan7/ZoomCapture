@@ -84,7 +84,7 @@ export function SidePanel({
         <IconButton icon={PanelLeftClose} label="Hide panel" size="sm" tooltipAlign="end" onClick={onClose} />
       </header>
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-        {tab === 'media' && <MediaLibrary />}
+        {tab === 'media' && <MediaLibrary keepTab={keepTab} />}
         {tab === 'text' && <TextTab />}
         {tab === 'zoom' && <ZoomTab keepTab={keepTab} />}
         {tab === 'cursor' && <CursorSettings />}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { AudioLines, ChevronDown, Download, FileText, FileUp, Film, Image, Loader2, Monitor, Plus, Trash2, Video, type LucideIcon } from 'lucide-react';
 import { downloadBlob } from '@/services/export/download';
 import { assetFileName } from '@/services/export/exporters';
-import { IMPORT_ACCEPT, IMPORT_LIMITS } from '@/services/media/importFiles';
+import { IMPORT_ACCEPT, IMPORT_LIMIT_LABELS } from '@/services/media/importFiles';
 import { closePdf } from '@/services/media/pdf';
 import { forgetThumbnails } from '@/services/media/thumbnails';
 import { getAssetBlob } from '@/services/storage/assetRepository';
@@ -51,7 +51,7 @@ function describe(asset: MediaAsset): string {
  * browsing, or by dropping files anywhere in the editor (on the timeline to place them there).
  * Files are added with + or dragged onto the timeline; PDFs open a page picker.
  */
-export function MediaLibrary() {
+export function MediaLibrary({ keepTab }: { keepTab: () => void }) {
   const { store, recording, assets, reportError, forgetAsset } = useEditor();
   const toast = useToast();
   const { importFiles, importing } = useImportFiles();
@@ -89,7 +89,7 @@ export function MediaLibrary() {
         </h3>
         <ul className="space-y-1.5" aria-label="Media files">
           {own.map((asset) => (
-            <AssetCard key={asset.id} asset={asset} used={used.has(asset.id)} onDownload={download} />
+            <AssetCard key={asset.id} asset={asset} used={used.has(asset.id)} onDownload={download} keepTab={keepTab} />
           ))}
         </ul>
       </section>
@@ -122,12 +122,12 @@ export function MediaLibrary() {
         ) : (
           <ul className="space-y-1.5" aria-label="Imported files">
             {imported.map((asset) => (
-              <AssetCard key={asset.id} asset={asset} used={used.has(asset.id)} onDownload={download} onRemove={remove} />
+              <AssetCard key={asset.id} asset={asset} used={used.has(asset.id)} onDownload={download} onRemove={remove} keepTab={keepTab} />
             ))}
           </ul>
         )}
         <p className="text-[11px] text-fg-subtle">
-          Up to {formatBytes(IMPORT_LIMITS.video)} per video, {formatBytes(IMPORT_LIMITS.audio)} per audio file, {formatBytes(IMPORT_LIMITS.pdf)} per PDF.
+          Up to {IMPORT_LIMIT_LABELS.video} per video, {IMPORT_LIMIT_LABELS.audio} per audio file, {IMPORT_LIMIT_LABELS.image} per image, {IMPORT_LIMIT_LABELS.pdf} per PDF.
         </p>
       </section>
 
@@ -136,7 +136,7 @@ export function MediaLibrary() {
           Voiceover
         </h3>
         <p className="text-xs text-fg-subtle">Narrate from the playhead while the preview plays (silently). The recording goes on the Voiceover track and plays over videos, images and PDF pages.</p>
-        <VoiceoverRecorder />
+        <VoiceoverRecorder keepTab={keepTab} />
       </section>
     </div>
   );
@@ -147,11 +147,14 @@ function AssetCard({
   used,
   onDownload,
   onRemove,
+  keepTab,
 }: {
   asset: MediaAsset;
   used: boolean;
   onDownload: (asset: MediaAsset) => void;
   onRemove?: (asset: MediaAsset) => void;
+  /** Adding from the library selects the new clip but stays on this panel. */
+  keepTab: () => void;
 }) {
   const actions = useTimelineActions();
   const [pagesOpen, setPagesOpen] = useState(false);
@@ -198,7 +201,18 @@ function AssetCard({
             onClick={() => setPagesOpen(!pagesOpen)}
           />
         ) : (
-          placeable && <IconButton icon={Plus} label={`Add ${name} at the playhead`} size="sm" className="size-7 shrink-0" onClick={() => actions.addMedia(asset)} />
+          placeable && (
+            <IconButton
+              icon={Plus}
+              label={`Add ${name} at the playhead`}
+              size="sm"
+              className="size-7 shrink-0"
+              onClick={() => {
+                keepTab();
+                actions.addMedia(asset);
+              }}
+            />
+          )
         )}
         <IconButton icon={Download} label={`Download ${name}`} size="sm" className="size-7 shrink-0" tooltipAlign="end" onClick={() => onDownload(asset)} />
         {onRemove && (
@@ -214,7 +228,7 @@ function AssetCard({
           />
         )}
       </div>
-      {pdf && pagesOpen && <PdfPages asset={asset} />}
+      {pdf && pagesOpen && <PdfPages asset={asset} keepTab={keepTab} />}
     </li>
   );
 }
@@ -223,7 +237,7 @@ function AssetCard({
  * The pages of a PDF as thumbnails: pick one or several (click, Shift-click for a range) and add
  * them at the playhead, one after another, each shown for the chosen time.
  */
-function PdfPages({ asset }: { asset: MediaAsset }) {
+function PdfPages({ asset, keepTab }: { asset: MediaAsset; keepTab: () => void }) {
   const actions = useTimelineActions();
   const count = asset.pageCount ?? 1;
   const [selected, setSelected] = useState<number[]>([]);
@@ -275,6 +289,7 @@ function PdfPages({ asset }: { asset: MediaAsset }) {
           icon={Plus}
           disabled={selected.length === 0 || !valid}
           onClick={() => {
+            keepTab();
             if (actions.addPdfPages(asset, selected, Math.round(seconds * 1000)).length) setSelected([]);
           }}
         >

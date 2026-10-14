@@ -20,6 +20,9 @@ export const IMPORT_LIMITS: Record<ImportKind, number> = {
 
 const KIND_NAMES: Record<ImportKind, string> = { video: 'Videos', audio: 'Audio files', image: 'Images', pdf: 'PDFs' };
 
+/** The limits as people say them. */
+export const IMPORT_LIMIT_LABELS: Record<ImportKind, string> = { video: '2 GB', audio: '500 MB', image: '50 MB', pdf: '200 MB' };
+
 /** The `accept` list for file pickers. */
 export const IMPORT_ACCEPT = 'video/*,audio/*,image/*,application/pdf,.pdf,.mkv,.m4a,.flac,.opus';
 
@@ -97,7 +100,7 @@ export async function classifyFile(file: Blob & { name?: string }): Promise<Snif
 export async function checkSize(file: Blob, kind: ImportKind): Promise<void> {
   const limit = IMPORT_LIMITS[kind];
   if (file.size > limit) {
-    throw new UnsupportedMediaError(`This file is ${formatBytes(file.size)}. ${KIND_NAMES[kind]} up to ${formatBytes(limit)} can be imported.`);
+    throw new UnsupportedMediaError(`This file is ${formatBytes(file.size)}, over the limit: ${KIND_NAMES[kind]} up to ${IMPORT_LIMIT_LABELS[kind]} can be imported.`);
   }
   const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
   if (estimate?.quota !== undefined && estimate.usage !== undefined && file.size > estimate.quota - estimate.usage) {

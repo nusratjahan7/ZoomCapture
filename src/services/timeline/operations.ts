@@ -360,7 +360,7 @@ export function addTextClip(timeline: Timeline, atMs: number, text = 'Your text'
 }
 
 export type TextPatch = Partial<{ text: string; position: NormalizedPoint; style: Partial<TextStyle> }>;
-export type MediaPatch = Partial<Pick<MediaClip, 'muted' | 'volume'>>;
+export type MediaPatch = Partial<Pick<MediaClip, 'muted' | 'volume' | 'page'>>;
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
@@ -380,6 +380,7 @@ export function updateTextClip(timeline: Timeline, clipId: string, patch: TextPa
 export function updateMediaClip(timeline: Timeline, clipId: string, patch: MediaPatch): Timeline {
   const { track, clip } = requireClip(timeline, clipId);
   if (clip.type !== 'media') throw new TimelineEditError('Only media clips have sound settings.');
+  if (patch.page !== undefined && (!Number.isInteger(patch.page) || patch.page < 1)) throw new TimelineEditError('Pages are numbered from 1.');
   const updated: MediaClip = { ...clip, ...patch, volume: patch.volume === undefined ? clip.volume : clamp01(patch.volume) };
   return { ...timeline, tracks: replaceTrack(timeline.tracks, track.id, { ...track, clips: track.clips.map((c) => (c.id === clipId ? updated : c)) }) };
 }
