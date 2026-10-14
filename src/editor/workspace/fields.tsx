@@ -14,9 +14,10 @@ const inputClass = (invalid: boolean) =>
     invalid ? 'border-danger' : 'border-line-strong hover:border-fg-subtle',
   );
 
-export function FieldRow({ label, children, htmlFor }: { label: string; children: ReactNode; htmlFor?: string }) {
+export function FieldRow({ label, children, htmlFor, stacked }: { label: string; children: ReactNode; htmlFor?: string; stacked?: boolean }) {
   return (
-    <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-2">
+    // Stacked (label above) where there's no room for a label column, e.g. in narrow cards.
+    <div className={stacked ? 'grid gap-0.5' : 'grid grid-cols-[96px_minmax(0,1fr)] items-center gap-2'}>
       <label htmlFor={htmlFor} className="text-xs text-fg-muted">
         {label}
       </label>
@@ -32,6 +33,7 @@ function DraftField({
   parse,
   onCommit,
   hint,
+  stacked,
 }: {
   label: string;
   value: number;
@@ -39,6 +41,7 @@ function DraftField({
   parse: (text: string) => number | null;
   onCommit: (value: number) => void;
   hint?: string;
+  stacked?: boolean;
 }) {
   const id = useId();
   const [draft, setDraft] = useState(format(value));
@@ -60,7 +63,7 @@ function DraftField({
   };
 
   return (
-    <FieldRow label={label} htmlFor={id}>
+    <FieldRow label={label} htmlFor={id} stacked={stacked}>
       <div>
         <input
           id={id}
@@ -85,9 +88,10 @@ function DraftField({
 }
 
 /** A time in m:ss.xx (milliseconds internally). */
-export function TimeField(props: { label: string; value: number; onCommit: (ms: number) => void; min?: number }) {
+export function TimeField(props: { label: string; value: number; onCommit: (ms: number) => void; min?: number; stacked?: boolean }) {
   return (
     <DraftField
+      stacked={props.stacked}
       label={props.label}
       value={props.value}
       format={formatTimecode}
