@@ -52,7 +52,7 @@ export function RenderVideoDialog({
   // Only sizes up to the recording's own (rendering never upscales).
   // Only sizes up to the recording's own; the resolution names the short side of the output.
   const resolutions = RESOLUTIONS.filter((option) => option.value === 'source' || RESOLUTION_HEIGHT[option.value] < Math.min(source.width, source.height));
-  const size = frameSize(source, project.aspectRatio, settings.resolution);
+  const size = frameSize(source, project.aspectRatio, settings.resolution, project.customSize);
 
   const releaseUrl = () => {
     if (urlRef.current) URL.revokeObjectURL(urlRef.current);
@@ -91,6 +91,8 @@ export function RenderVideoDialog({
     try {
       // The bytes of every asset used on the timeline (read lazily from IndexedDB-backed blobs).
       const used = new Set(project.timeline.tracks.flatMap((track) => track.clips.flatMap((clip) => (clip.type === 'media' ? [clip.assetId] : []))));
+      // The background image too (it isn't on the timeline).
+      if (project.background?.kind === 'image' && project.background.imageAssetId) used.add(project.background.imageAssetId);
       const [entries, { renderProject }] = await Promise.all([
         Promise.all([...used].map(async (id) => [id, await getAssetBlob(id)] as const)),
         // Loaded on demand: the encoder library is only needed when rendering.

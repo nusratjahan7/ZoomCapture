@@ -38,7 +38,20 @@ export async function updateZoomMarkers(
 }
 
 /** Everything the editor changes in a project (the rest is owned by other operations). */
-export type ProjectEdits = Pick<Project, 'timeline' | 'aspectRatio' | 'renderEffects' | 'zoom' | 'cameraLayout' | 'exportSettings'>;
+export type ProjectEdits = Pick<
+  Project,
+  | 'timeline'
+  | 'aspectRatio'
+  | 'renderEffects'
+  | 'zoom'
+  | 'cameraLayout'
+  | 'exportSettings'
+  | 'customSize'
+  | 'background'
+  | 'frameLayout'
+  | 'subtitleStyle'
+  | 'subtitles'
+>;
 
 /**
  * Autosave: writes the editor's state in one read-modify-write transaction. Fields the editor
@@ -56,6 +69,11 @@ export async function saveProjectEdits(projectId: string, edits: ProjectEdits): 
       zoom: edits.zoom,
       cameraLayout: edits.cameraLayout,
       exportSettings: edits.exportSettings,
+      customSize: edits.customSize,
+      background: edits.background,
+      frameLayout: edits.frameLayout,
+      subtitleStyle: edits.subtitleStyle,
+      subtitles: edits.subtitles,
       updatedAt: Date.now(),
     };
     await tx.objectStore('projects').put(updated);

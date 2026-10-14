@@ -1,5 +1,5 @@
-import { Check, Crop, Magnet, Maximize2, Pause, Play, Plus, Scissors, SkipBack, SkipForward, Sparkles, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react';
-import { TRACK_NAMES } from '@/services/timeline/model';
+import { Check, Crop, Magnet, Move, Maximize2, Pause, Play, Plus, Scissors, SkipBack, SkipForward, Sparkles, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react';
+import { findClip, TRACK_NAMES } from '@/services/timeline/model';
 import { addTrack } from '@/services/timeline/operations';
 import { IconButton } from '@/shared/components';
 import type { TrackKind } from '@/types';
@@ -41,6 +41,12 @@ export function ControlBar({ options, onOptionsChange }: { options: PreviewOptio
   const actions = useTimelineActions();
   const playing = usePlaying(player);
   const markerSelected = selection.length === 1 && markers.some((marker) => marker.id === selection[0]);
+  // A clip on a video track: its picture can be moved, resized and cropped in the preview.
+  const pictureSelected = useEditorState((snapshot) => {
+    if (snapshot.selection.length !== 1) return false;
+    const found = findClip(snapshot.project.timeline, snapshot.selection[0]!);
+    return Boolean(found && found.track.kind === 'video' && found.clip.type === 'media');
+  });
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 border-y border-line bg-surface px-2 py-1" role="toolbar" aria-label="Playback and editing">
@@ -90,6 +96,15 @@ export function ControlBar({ options, onOptionsChange }: { options: PreviewOptio
       </div>
 
       <div className="no-scrollbar flex min-w-0 items-center justify-end gap-0.5 overflow-x-auto">
+        {pictureSelected && (
+          <ToggleButton
+            on={options.clipFraming}
+            label={options.clipFraming ? 'Done positioning' : 'Position: move, resize and crop the picture in the preview'}
+            icon={options.clipFraming ? Check : Move}
+            text={options.clipFraming ? 'Done' : 'Position'}
+            onClick={() => onOptionsChange({ clipFraming: !options.clipFraming })}
+          />
+        )}
         {markerSelected && (
           <ToggleButton on={options.framing} label={options.framing ? 'Done adjusting framing' : 'Adjust framing: drag the zoom focus in the preview'} icon={options.framing ? Check : Crop} text={options.framing ? 'Done' : 'Framing'} onClick={() => onOptionsChange({ framing: !options.framing })} />
         )}

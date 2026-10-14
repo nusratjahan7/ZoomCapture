@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowUp,
   AudioLines,
+  Captions,
   Copy,
   Eye,
   EyeOff,
@@ -48,7 +49,7 @@ const CLIP_COLORS: Record<TrackKind, string> = {
   text: 'border-accent-2/60 bg-accent-2/25',
 };
 /** Row heights: picture tracks are tall enough for preview frames. */
-const ROW_HEIGHTS: Record<TrackKind | 'zoom', number> = { video: 60, camera: 48, audio: 36, music: 36, text: 34, zoom: 32 };
+const ROW_HEIGHTS: Record<TrackKind | 'zoom' | 'captions', number> = { video: 60, camera: 48, audio: 36, music: 36, text: 34, zoom: 32, captions: 30 };
 const RULER_HEIGHT = 28;
 const MIN_PX_PER_SECOND = 8;
 const MAX_PX_PER_SECOND = 600;
@@ -80,23 +81,24 @@ type Ghost =
   | { kind: 'marker'; id: string; timeMs?: number; durationMs?: number };
 
 /** Timeline rows from top to bottom: the tracks, with the zoom effects lane right under the video. */
-type Row = { type: 'zoom' } | { type: 'track'; track: TimelineTrack; index: number };
+type Row = { type: 'zoom' } | { type: 'captions' } | { type: 'track'; track: TimelineTrack; index: number };
 
-function timelineRows(timeline: Timeline): Row[] {
+/** Rows top to bottom: tracks, with the Zoom lane under the video (and Captions under it, when there are subtitles). */
+function timelineRows(timeline: Timeline, captions = false): Row[] {
   const rows: Row[] = timeline.tracks.map((track, index) => ({ type: 'track', track, index }));
   let lastVideo = -1;
   timeline.tracks.forEach((track, index) => {
     if (track.kind === 'video') lastVideo = index;
   });
-  rows.splice(lastVideo + 1, 0, { type: 'zoom' });
+  rows.splice(lastVideo + 1, 0, { type: 'zoom' }, ...(captions ? [{ type: 'captions' } as const] : []));
   return rows;
 }
 
-const rowHeight = (row: Row) => ROW_HEIGHTS[row.type === 'zoom' ? 'zoom' : row.track.kind];
+const rowHeight = (row: Row) => ROW_HEIGHTS[row.type === 'track' ? row.track.kind : row.type];
 
 /** Height that shows every row (ruler, lanes and the horizontal scrollbar). */
-export function timelineContentHeight(timeline: Timeline): number {
-  return RULER_HEIGHT + timelineRows(timeline).reduce((sum, row) => sum + rowHeight(row), 0) + 16;
+export function timelineContentHeight(timeline: Timeline, captions = false): number {
+  return RULER_HEIGHT + timelineRows(timeline, captions).reduce((sum, row) => sum + rowHeight(row), 0) + 16;
 }
 
 export function TimelinePanel() {
@@ -124,7 +126,9 @@ export function TimelinePanel() {
   const playheadRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const assetMap = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
-  const rows = useMemo(() => timelineRows(timeline), [timeline]);
+  const subtitles = useEditorState((snapshot) => snapshot.project.subtitles);
+  const cues = useMemo(() => subtitles.flatMap((track) => track.cues), [subtitles]);
+  const rows = useMemo(() => timelineRows(timeline, cues.length > 0), [timeline, cues.length]);
 
   // Fit the whole timeline on first show.
   const duration = Math.max(timeline.durationMs, 1000);
@@ -389,7 +393,11 @@ export function TimelinePanel() {
             <div ref={headersRef} className="sticky left-0 z-30 w-28 shrink-0 border-r border-line bg-surface sm:w-44">
               <div className="sticky top-0 z-10 border-b border-line bg-surface" style={{ height: RULER_HEIGHT }} />
               {rows.map((row, position) =>
-                row.type === 'zoom' ? (
+                row.type === 'captions' ? (
+                  <div key="captions" className="flex items-center gap-1.5 border-b border-line px-2 text-[11px] text-fg-muted" style={{ height: rowHeight(row) }}>
+                    <Captions size={13} aria-hidden className="shrink-0 text-accent-2" /> <span className="truncate">Captions</span>
+                  </div>
+                ) : row.type === 'zoom' ? (
                   <div key="zoom" className="flex items-center gap-1.5 border-b border-line px-2 text-[11px] text-fg-muted" style={{ height: rowHeight(row) }}>
                     <ZoomIn size={13} aria-hidden className="shrink-0 text-accent" /> <span className="truncate">Zoom</span>
                   </div>
@@ -447,7 +455,23 @@ export function TimelinePanel() {
                 </div>
 
                 {rows.map((row) =>
-                  row.type === 'zoom' ? (
+                  row.type === 'captions' ? (
+                    <Lane key="captions" label="Captions" testId="captions-track" height={rowHeight(row)} onBackground={onBackground}>
+                      {cues.map((cue) => (
+                        <button
+                          key={cue.id}
+                          type="button"
+                          title={cue.text}
+                          aria-label={`Subtitle at ${formatTimecode(cue.startMs)}: ${cue.text}`}
+                          onClick={() => player?.seek(cue.startMs)}
+                          className="absolute inset-y-1 overflow-hidden rounded-md border border-accent-2/60 bg-accent-2/15 px-1.5 text-left text-[10px] whitespace-nowrap text-fg hover:bg-accent-2/25"
+                          style={{ left: x(cue.startMs), width: Math.max(6, x(cue.endMs - cue.startMs)) }}
+                        >
+                          {cue.text.replace(/\n/g, ' ')}
+                        </button>
+                      ))}
+                    </Lane>
+                  ) : row.type === 'zoom' ? (
                     <Lane key="zoom" label="Zoom effects" testId="zoom-track" height={rowHeight(row)} onBackground={onBackground}>
                       {timeline.zoomMarkers.length === 0 && (
                         <span aria-hidden className="pointer-events-none absolute inset-y-0 left-2 flex items-center text-[11px] text-fg-subtle">

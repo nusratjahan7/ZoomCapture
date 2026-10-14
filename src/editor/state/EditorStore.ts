@@ -171,6 +171,11 @@ export class EditorStore {
       zoom: project.zoom,
       cameraLayout: project.cameraLayout,
       exportSettings: project.exportSettings,
+      customSize: project.customSize,
+      background: project.background,
+      frameLayout: project.frameLayout,
+      subtitleStyle: project.subtitleStyle,
+      subtitles: project.subtitles,
     }).then(
       () => {
         this.savedProject = project;

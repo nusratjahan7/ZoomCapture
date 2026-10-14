@@ -1,6 +1,7 @@
 import { markerSpan } from '@/services/zoom/markers';
 import { markerClipId } from './attachment';
-import type { MediaAsset, MediaClip, NormalizedPoint, TextClip, TextStyle, Timeline, TimelineClip, TimelineTrack, TrackKind } from '@/types';
+import { MAX_FADE_MS } from '@/services/render/audioMix';
+import type { ClipTransform, MediaAsset, MediaClip, NormalizedPoint, TextClip, TextStyle, Timeline, TimelineClip, TimelineTrack, TrackKind } from '@/types';
 import { createId } from '@/utils/id';
 import {
   acceptsClip,
@@ -267,7 +268,7 @@ export function moveTrack(timeline: Timeline, trackId: string, direction: -1 | 1
   return { ...timeline, tracks };
 }
 
-export type TrackPatch = Partial<Pick<TimelineTrack, 'name' | 'muted' | 'hidden' | 'locked'>>;
+export type TrackPatch = Partial<Pick<TimelineTrack, 'name' | 'muted' | 'hidden' | 'locked' | 'volume'>>;
 
 export function updateTrack(timeline: Timeline, trackId: string, patch: TrackPatch): Timeline {
   const name = patch.name?.replace(/\s+/g, ' ').trim().slice(0, 40);
@@ -359,8 +360,8 @@ export function addTextClip(timeline: Timeline, atMs: number, text = 'Your text'
   return { timeline: finish(placed.timeline, tracks), clipId: clip.id };
 }
 
-export type TextPatch = Partial<{ text: string; position: NormalizedPoint; style: Partial<TextStyle> }>;
-export type MediaPatch = Partial<Pick<MediaClip, 'muted' | 'volume' | 'page'>>;
+export type TextPatch = Partial<{ text: string; position: NormalizedPoint; style: Partial<TextStyle>; callout: { target: NormalizedPoint } | null }>;
+export type MediaPatch = Partial<Pick<MediaClip, 'muted' | 'volume' | 'page' | 'fadeInMs' | 'fadeOutMs' | 'opacity'>>;
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
@@ -372,8 +373,11 @@ export function updateTextClip(timeline: Timeline, clipId: string, patch: TextPa
     ...clip,
     text,
     position: patch.position ? { x: clamp01(patch.position.x), y: clamp01(patch.position.y) } : clip.position,
-    style: { ...clip.style, ...patch.style },
+    style: { ...clip.style, ...patch.style, ...(patch.style?.opacity !== undefined ? { opacity: clamp01(patch.style.opacity) } : {}) },
   };
+  // A callout's arrow points at a spot in the frame; null turns it back into plain text.
+  if (patch.callout === null) delete updated.callout;
+  else if (patch.callout) updated.callout = { target: { x: clamp01(patch.callout.target.x), y: clamp01(patch.callout.target.y) } };
   return { ...timeline, tracks: replaceTrack(timeline.tracks, track.id, { ...track, clips: track.clips.map((c) => (c.id === clipId ? updated : c)) }) };
 }
 
@@ -381,7 +385,28 @@ export function updateMediaClip(timeline: Timeline, clipId: string, patch: Media
   const { track, clip } = requireClip(timeline, clipId);
   if (clip.type !== 'media') throw new TimelineEditError('Only media clips have sound settings.');
   if (patch.page !== undefined && (!Number.isInteger(patch.page) || patch.page < 1)) throw new TimelineEditError('Pages are numbered from 1.');
-  const updated: MediaClip = { ...clip, ...patch, volume: patch.volume === undefined ? clip.volume : clamp01(patch.volume) };
+  const fade = (value: number | undefined, current: number | undefined) => (value === undefined ? current : Math.round(Math.min(MAX_FADE_MS, Math.max(0, value))));
+  const updated: MediaClip = {
+    ...clip,
+    ...patch,
+    volume: patch.volume === undefined ? clip.volume : clamp01(patch.volume),
+    opacity: patch.opacity === undefined ? clip.opacity : clamp01(patch.opacity),
+    fadeInMs: fade(patch.fadeInMs, clip.fadeInMs),
+    fadeOutMs: fade(patch.fadeOutMs, clip.fadeOutMs),
+  };
+  return { ...timeline, tracks: replaceTrack(timeline.tracks, track.id, { ...track, clips: track.clips.map((c) => (c.id === clipId ? updated : c)) }) };
+}
+
+/**
+ * Sets (or with `undefined`, removes) how a clip on a video track is cropped and placed in the
+ * frame. The values are clamped by the caller with `clampTransform` (it knows the picture's size).
+ */
+export function setClipTransform(timeline: Timeline, clipId: string, transform: ClipTransform | undefined): Timeline {
+  const { track, clip } = requireClip(timeline, clipId);
+  if (clip.type !== 'media' || track.kind !== 'video') throw new TimelineEditError('Only pictures on video tracks can be cropped and moved.');
+  if (track.locked) throw new TimelineEditError(`The “${track.name}” track is locked.`);
+  const { transform: _previous, ...rest } = clip;
+  const updated: MediaClip = transform ? { ...rest, transform } : rest;
   return { ...timeline, tracks: replaceTrack(timeline.tracks, track.id, { ...track, clips: track.clips.map((c) => (c.id === clipId ? updated : c)) }) };
 }
 

@@ -1,7 +1,7 @@
 {
   "name": "zoomcapture",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "ZoomCapture — professional screen recorder with automatic zoom effects (Chrome Extension, Manifest V3).",
   "type": "module",
   "scripts": {
@@ -17,6 +17,7 @@
     "test:native": "npm run build && node tests/native/run.mjs"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.3.0",
     "idb": "^8.0.4",
     "lucide-react": "^1.55.0",
     "mediabunny": "1.59.1",

@@ -19,9 +19,11 @@ import {
 import { safeFileName } from '@/services/export/exporters';
 import { clipDuration, contentDuration, isMediaClip, isStill } from '@/services/timeline/model';
 import type { Size } from '@/services/zoom/coordinates';
-import type { ExportSettings, MediaAsset, MediaClip, Project, Recording, Timeline } from '@/types';
+import type { ExportSettings, MediaAsset, MediaClip, Project, Recording, Timeline, TimelineTrack } from '@/types';
+import { gainPoints } from './audioMix';
 import { StillCache, type StillSource } from './stills';
-import { activeVisuals, contentRect, frameSize, timelineScene } from './compose';
+import { activeVisuals, frameSize, timelineScene } from './compose';
+import { activeCues, backgroundOf, frameLayoutOf, layoutRect, subtitleStyleOf } from './enhancements';
 import { drawFrame, type FrameImage } from './draw';
 import { frameStateAt } from './frameState';
 import { frameTimestamps } from './output';
@@ -166,15 +168,15 @@ const frameImage = (sample: VideoSample | null | undefined): FrameImage | null =
   sample ? { image: sample.toCanvasImageSource(), width: sample.displayWidth, height: sample.displayHeight } : null;
 
 /** Media clips whose sound is heard, with their asset (skips muted tracks and clips, images, silent media). */
-export function audibleClips(timeline: Timeline, assets: ReadonlyMap<string, MediaAsset>): Array<{ clip: MediaClip; asset: MediaAsset }> {
-  const result: Array<{ clip: MediaClip; asset: MediaAsset }> = [];
+export function audibleClips(timeline: Timeline, assets: ReadonlyMap<string, MediaAsset>): Array<{ clip: MediaClip; asset: MediaAsset; track: TimelineTrack }> {
+  const result: Array<{ clip: MediaClip; asset: MediaAsset; track: TimelineTrack }> = [];
   for (const track of timeline.tracks) {
-    if (track.muted || !(track.kind === 'video' || track.kind === 'audio' || track.kind === 'music')) continue;
+    if (track.muted || (track.volume ?? 1) <= 0 || !(track.kind === 'video' || track.kind === 'audio' || track.kind === 'music')) continue;
     for (const clip of track.clips) {
       if (!isMediaClip(clip) || clip.muted || (clip.volume ?? 1) <= 0) continue;
       const asset = assets.get(clip.assetId);
       if (!asset || isStill(asset) || asset.hasAudio === false) continue;
-      result.push({ clip, asset });
+      result.push({ clip, asset, track });
     }
   }
   return result;
@@ -234,15 +236,18 @@ async function prepareAudioMix(
       const windowEnd = Math.min(durationSeconds, windowStart + AUDIO_WINDOW_SECONDS);
       const frames = Math.max(1, Math.round((windowEnd - windowStart) * SAMPLE_RATE));
       const context = new OfflineAudioContext(CHANNELS, frames, SAMPLE_RATE);
-      for (const { clip } of clips) {
+      for (const { clip, track } of clips) {
         const buffer = buffers.get(clip.assetId);
         if (!buffer) continue;
         const placement = audioPlacement(clip, windowStart, windowEnd);
         if (!placement || placement.offset >= buffer.duration) continue;
         const node = context.createBufferSource();
         node.buffer = buffer;
+        // Volume, track volume and fades, as straight-line automation (see audioMix.ts).
         const gain = context.createGain();
-        gain.gain.value = clip.volume ?? 1;
+        const points = gainPoints(clip, track, windowStart, windowEnd);
+        gain.gain.setValueAtTime(points[0]?.[1] ?? 0, Math.max(0, points[0]?.[0] ?? 0));
+        for (const [time, value] of points.slice(1)) gain.gain.linearRampToValueAtTime(value, time);
         node.connect(gain).connect(context.destination);
         node.start(placement.when, placement.offset, placement.duration);
       }
@@ -338,14 +343,30 @@ export async function renderProject(
 
     const source = { width: job.recording.width ?? 1920, height: job.recording.height ?? 1080 };
     const quality = new Quality(settings.quality === 'high' ? 'high' : 'medium');
-    const requested = frameSize(source, job.project.aspectRatio, settings.resolution);
+    const requested = frameSize(source, job.project.aspectRatio, settings.resolution, job.project.customSize);
     const { size, codec } = await chooseEncoding(requested, settings.frameRate, quality, warnings);
     throwIfAborted(signal);
 
     const canvas = new OffscreenCanvas(size.width, size.height);
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new RenderError('Could not create a drawing surface for rendering.', 'failed');
-    const content = contentRect(size, source);
+    const background = backgroundOf(job.project);
+    const frameLayout = frameLayoutOf(job.project);
+    const subtitleStyle = subtitleStyleOf(job.project);
+    const content = layoutRect(size, source, frameLayout);
+    // An imported background image, decoded once at the output size.
+    let backgroundImage: ImageBitmap | null = null;
+    if (background.kind === 'image' && background.imageAssetId) {
+      const blob = job.blobs.get(background.imageAssetId);
+      const asset = assetMap.get(background.imageAssetId);
+      backgroundImage = blob
+        ? await stills.get(
+            { assetId: background.imageAssetId, kind: 'image', size: asset?.width && asset.height ? { width: asset.width, height: asset.height } : undefined, load: async () => blob },
+            size,
+          )
+        : null;
+      if (!backgroundImage) warnings.push('The background image couldn\'t be read, so its colour is used instead.');
+    }
 
     output = new Output({ format: new WebMOutputFormat(), target: new BufferTarget() });
     const videoSource = new CanvasSource(canvas, { codec, quality, keyFrameInterval: 2 });
@@ -391,11 +412,18 @@ export async function renderProject(
             size.width,
             size.height,
             {
-              layers: layers.map((layer) => (layer instanceof ImageBitmap ? { image: layer, width: layer.width, height: layer.height } : frameImage(layer))),
+              layers: layers.map((layer, index) => {
+                const image = layer instanceof ImageBitmap ? { image: layer, width: layer.width, height: layer.height } : frameImage(layer);
+                const { clip } = visuals.layers[index]!;
+                return image && { ...image, transform: clip.transform, opacity: clip.opacity };
+              }),
               camera: frameImage(camera),
               cameraLayout: job.project.cameraLayout,
               texts: visuals.texts,
               content,
+              background: { style: background, image: backgroundImage && { image: backgroundImage, width: backgroundImage.width, height: backgroundImage.height } },
+              frameLayout,
+              subtitles: { lines: activeCues(job.project, timeMs).map((cue) => cue.text), style: subtitleStyle },
             },
             frameStateAt(scene, timeMs),
           );

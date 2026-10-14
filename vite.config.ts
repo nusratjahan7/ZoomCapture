@@ -32,14 +32,36 @@ function pdfjsAssets(): Plugin {
  *   manifest references it by name. It is an ES module worker (`"type": "module"`).
  * - `public/` (manifest + icons) is copied verbatim to the root of `dist/`.
  */
+/**
+ * The speech-to-text engine (transformers.js) runs ONNX Runtime's WebAssembly build. Its loader and
+ * binary are loaded at run time, so they ship with the extension under `dist/ort/` (never from a
+ * CDN). The plain WebAssembly build is used: the WebGPU one is twice as large and not needed.
+ */
+function onnxRuntimeAssets(): Plugin {
+  const dist = resolve(import.meta.dirname, 'node_modules', 'onnxruntime-web', 'dist');
+  return {
+    name: 'zoomcapture-onnxruntime-assets',
+    generateBundle() {
+      for (const file of ['ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm']) {
+        this.emitFile({ type: 'asset', fileName: `ort/${file}`, source: readFileSync(join(dist, file)) });
+      }
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => ({
   root: srcDir,
   publicDir: resolve(import.meta.dirname, 'public'),
   base: '/',
-  plugins: [react(), tailwindcss(), pdfjsAssets()],
+  plugins: [react(), tailwindcss(), pdfjsAssets(), onnxRuntimeAssets()],
   resolve: {
-    alias: { '@': srcDir },
+    alias: [
+      { find: '@', replacement: srcDir },
+      // transformers.js asks for the WebGPU build; the WebAssembly one is enough (see above).
+      { find: /^onnxruntime-web\/webgpu$/, replacement: 'onnxruntime-web/wasm' },
+    ],
   },
+  worker: { format: 'es' },
   build: {
     outDir: resolve(import.meta.dirname, 'dist'),
     emptyOutDir: true,

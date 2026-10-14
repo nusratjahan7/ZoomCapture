@@ -1,15 +1,18 @@
 import { updateMarkerOnTimeline } from '@/services/timeline/attachment';
 import { useEffect, useId, useState, type ReactNode } from 'react';
-import { Copy, Focus, MousePointer2, MousePointerClick, Scissors, Sparkles, Trash2, ZoomIn } from 'lucide-react';
+import { Copy, Focus, MousePointer2, MousePointerClick, RotateCcw, Scissors, Sparkles, Trash2, ZoomIn } from 'lucide-react';
 import { renderEffectsOf } from '@/services/render/frameState';
 import { describeMimeType } from '@/services/recording/mimeTypes';
 import { clipDuration, findClip, isMediaClip, isStill } from '@/services/timeline/model';
-import { setClipTiming, updateMediaClip, updateTextClip } from '@/services/timeline/operations';
+import { setClipTiming, setClipTransform, updateMediaClip, updateTextClip } from '@/services/timeline/operations';
+import { clampTransform, fittedTransform, setCrop } from '@/services/render/clipFrame';
 import type { MarkerPatch } from '@/services/zoom/markers';
 import { Button, SegmentedControl, Toggle } from '@/shared/components';
 import {
   TRANSITION_MS,
   ZOOM_LIMITS,
+  type ClipTransform,
+  type FontChoice,
   type MediaClip,
   type Project,
   type TextClip,
@@ -20,6 +23,8 @@ import {
 } from '@/types';
 import { formatBytes, formatDuration } from '@/utils/format';
 import { trackingSummary } from '../components/ZoomEffectsPanel';
+import { MAX_FADE_MS } from '@/services/render/audioMix';
+import { FONT_OPTIONS } from './panels/common';
 import { formatTimecode, useEditor, useEditorState } from '../state/EditorContext';
 import { FieldRow, NumberField, SliderField, TimeField } from './fields';
 import { useTimelineActions } from './useTimelineActions';
@@ -137,8 +142,38 @@ function MediaClipProperties({ clip, track }: { clip: MediaClip; track: Timeline
             checked={Boolean(clip.muted)}
             onCheckedChange={(muted) => edit(muted ? 'Mute clip' : 'Unmute clip', (p) => ({ ...p, timeline: updateMediaClip(p.timeline, clip.id, { muted }) }))}
           />
+          <NumberField
+            label="Fade in"
+            unit="s"
+            value={clip.fadeInMs ?? 0}
+            scale={1000}
+            min={0}
+            max={Math.min(MAX_FADE_MS, clipDuration(clip) / 2)}
+            onCommit={(fadeInMs) => edit('Change fade in', (p) => ({ ...p, timeline: updateMediaClip(p.timeline, clip.id, { fadeInMs }) }))}
+          />
+          <NumberField
+            label="Fade out"
+            unit="s"
+            value={clip.fadeOutMs ?? 0}
+            scale={1000}
+            min={0}
+            max={Math.min(MAX_FADE_MS, clipDuration(clip) / 2)}
+            onCommit={(fadeOutMs) => edit('Change fade out', (p) => ({ ...p, timeline: updateMediaClip(p.timeline, clip.id, { fadeOutMs }) }))}
+          />
         </>
       )}
+      {track.kind === 'video' && (
+        <SliderField
+          label="Opacity"
+          value={clip.opacity ?? 1}
+          min={0}
+          max={1}
+          step={0.05}
+          display={(value) => `${Math.round(value * 100)} %`}
+          onChange={(opacity) => edit('Change opacity', (p) => ({ ...p, timeline: updateMediaClip(p.timeline, clip.id, { opacity }) }), `opacity:${clip.id}`)}
+        />
+      )}
+      {track.kind === 'video' && <PictureFields clip={clip} source={asset?.width && asset.height ? { width: asset.width, height: asset.height } : undefined} />}
       {asset && (
         <p className="text-[11px] text-fg-subtle">
           {describeMimeType(asset.mimeType)} · {formatBytes(asset.size)}
@@ -147,6 +182,46 @@ function MediaClipProperties({ clip, track }: { clip: MediaClip; track: Timeline
       )}
       <ItemActions canSplit onDuplicate />
     </Section>
+  );
+}
+
+/** Exact position, size and crop of a clip's picture (the same as dragging it in the preview). */
+function PictureFields({ clip, source }: { clip: MediaClip; source?: { width: number; height: number } }) {
+  const { store, recording } = useEditor();
+  const frame = { width: recording.width ?? 1920, height: recording.height ?? 1080 };
+  const picture = source ?? frame;
+  const frameAspect = frame.width / frame.height;
+  const current = clip.transform ?? fittedTransform(picture, frameAspect);
+  const set = (label: string, next: ClipTransform | undefined) =>
+    store.edit(label, (p) => ({ ...p, timeline: setClipTransform(p.timeline, clip.id, next && clampTransform(next, picture, frameAspect)) }));
+  const percent = (label: string, value: number, apply: (value: number) => ClipTransform, min: number, max: number) => (
+    <NumberField label={label} unit="%" value={value * 100} min={min} max={max} decimals={0} onCommit={(next) => set(`Change ${label.toLowerCase()}`, apply(next / 100))} />
+  );
+  return (
+    <div className="space-y-2 border-t border-line pt-3" data-testid="picture-fields">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-fg-muted">Position & crop</h3>
+        <Button size="sm" variant="ghost" icon={RotateCcw} disabled={!clip.transform} onClick={() => set('Reset picture', undefined)}>
+          Reset
+        </Button>
+      </div>
+      {percent('Left', current.x, (x) => ({ ...current, x }), -400, 95)}
+      {percent('Top', current.y, (y) => ({ ...current, y }), -400, 95)}
+      {percent('Width', current.width, (width) => ({ ...current, width }), 5, 400)}
+      {(['left', 'top', 'right', 'bottom'] as const).map((edge) => (
+        <NumberField
+          key={edge}
+          label={`Crop ${edge}`}
+          unit="%"
+          value={current.crop[edge] * 100}
+          min={0}
+          max={45}
+          decimals={0}
+          onCommit={(value) => set('Crop picture', setCrop(current, picture, frameAspect, edge, value / 100))}
+        />
+      ))}
+      <p className="text-[11px] text-fg-subtle">Or click “Position” under the preview and drag the picture, its corners, or (Crop) its edges.</p>
+    </div>
   );
 }
 
@@ -190,7 +265,53 @@ function TextProperties({ clip }: { clip: TextClip }) {
           className="h-8 w-16 cursor-pointer rounded border border-line-strong bg-surface-2"
         />
       </FieldRow>
-      <Toggle label="Background box" description="Dark box behind the text" checked={clip.style.background} onCheckedChange={(background) => editText('Text background', { style: { background } })} />
+      <FieldRow label="Font">
+        <select
+          value={clip.style.font ?? 'system'}
+          aria-label="Font"
+          onChange={(event) => editText('Text font', { style: { font: event.target.value as FontChoice } })}
+          className="h-8 w-full rounded-lg border border-line-strong bg-surface-2 px-2 text-sm text-fg"
+        >
+          {FONT_OPTIONS.map((font) => (
+            <option key={font.value} value={font.value}>
+              {font.label}
+            </option>
+          ))}
+        </select>
+      </FieldRow>
+      <SliderField
+        label="Opacity"
+        value={clip.style.opacity ?? 1}
+        min={0.05}
+        max={1}
+        step={0.05}
+        display={(value) => `${Math.round(value * 100)} %`}
+        onChange={(opacity) => editText('Text opacity', { style: { opacity } }, `text-opacity:${clip.id}`)}
+      />
+      <Toggle label="Background box" description="A box behind the text" checked={clip.style.background} onCheckedChange={(background) => editText('Text background', { style: { background } })} />
+      {clip.style.background && (
+        <FieldRow label="Box colour" htmlFor={`${colorId}-box`}>
+          <input
+            id={`${colorId}-box`}
+            type="color"
+            value={clip.style.backgroundColor ?? '#0a0c12'}
+            onChange={(event) => editText('Text box colour', { style: { backgroundColor: event.target.value } }, `box-color:${clip.id}`)}
+            className="h-8 w-16 cursor-pointer rounded border border-line-strong bg-surface-2"
+          />
+        </FieldRow>
+      )}
+      <Toggle
+        label="Callout arrow"
+        description="An arrow from the text to a point in the frame"
+        checked={Boolean(clip.callout)}
+        onCheckedChange={(on) => editText(on ? 'Add callout arrow' : 'Remove callout arrow', { callout: on ? { target: { x: Math.min(1, clip.position.x + 0.2), y: Math.min(1, clip.position.y + 0.2) } } : null })}
+      />
+      {clip.callout && (
+        <>
+          <NumberField label="Arrow to (across)" unit="%" value={clip.callout.target.x * 100} min={0} max={100} decimals={0} onCommit={(x) => editText('Move callout arrow', { callout: { target: { ...clip.callout!.target, x: x / 100 } } })} />
+          <NumberField label="Arrow to (down)" unit="%" value={clip.callout.target.y * 100} min={0} max={100} decimals={0} onCommit={(y) => editText('Move callout arrow', { callout: { target: { ...clip.callout!.target, y: y / 100 } } })} />
+        </>
+      )}
       <NumberField label="Across" unit="%" value={clip.position.x * 100} min={0} max={100} decimals={0} onCommit={(x) => editText('Move text', { position: { ...clip.position, x: x / 100 } })} />
       <NumberField label="Down" unit="%" value={clip.position.y * 100} min={0} max={100} decimals={0} onCommit={(y) => editText('Move text', { position: { ...clip.position, y: y / 100 } })} />
       <p className="text-[11px] text-fg-subtle">Or drag the text box in the preview.</p>

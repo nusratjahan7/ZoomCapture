@@ -70,14 +70,31 @@ export const CAMERA_BUBBLE_SCALE: Record<CameraBubbleSize, number> = { small: 0.
 /** Smallest and largest bubble diameter (fraction of the frame width) when resized freely. */
 export const CAMERA_BUBBLE_LIMITS = { min: 0.08, max: 0.4 } as const;
 
+export type CameraShape = 'circle' | 'rounded';
+
 /** Placement of the camera bubble over the screen video. `x`/`y` is its centre, normalised 0-1. */
 export interface CameraLayout {
   x: number;
   y: number;
   /** Preset size; used when `scale` is not set. */
   size: CameraBubbleSize;
-  /** Diameter as a fraction of the frame width, set by resizing the bubble. Overrides `size`. */
+  /** Diameter (width, for a rounded rectangle) as a fraction of the frame width. Overrides `size`. */
   scale?: number;
+  /** Module 08 styling; absent means a circle with a thin white border (see `cameraStyleOf`). */
+  shape?: CameraShape;
+  /** Rounded rectangle: width / height. */
+  aspect?: number;
+  /** Rounded rectangle: corner radius as a fraction of its shorter side (0-0.5). */
+  radius?: number;
+  /** Border width as a fraction of the bubble's width (0 = none), and its colour. */
+  borderWidth?: number;
+  borderColor?: string;
+  /** Drop shadow strength, 0-1. */
+  shadow?: number;
+  /** Colour shown around the camera picture (a ring of `padding`), or none. */
+  background?: string | null;
+  /** Width of that ring as a fraction of the bubble's width. */
+  padding?: number;
 }
 
 /** The bubble's diameter as a fraction of the frame width. */
@@ -115,11 +132,34 @@ export interface MediaClip {
   muted?: boolean;
   /** 0-1. */
   volume?: number;
+  /** Audio fades at the start and end of the clip (milliseconds, Module 08). */
+  fadeInMs?: number;
+  fadeOutMs?: number;
+  /** Video tracks: 0-1 (e.g. a semi-transparent logo watermark). Opaque when absent. */
+  opacity?: number;
   /** PDF assets: the page shown (1-based). Like an image, a page can be shown for any length. */
   page?: number;
+  /** Video tracks: crop and placement in the frame; without it the picture fills the frame (fitted). */
+  transform?: ClipTransform;
+}
+
+/**
+ * How a clip's picture is cropped and where it sits (Module 07). Fractions, so it holds at any
+ * output size. The picture keeps its shape: its height follows from `width` and the crop.
+ */
+export interface ClipTransform {
+  /** Fraction cut from each edge of the picture (0 = none). */
+  crop: { left: number; top: number; right: number; bottom: number };
+  /** Top-left corner of the cropped picture, as fractions of the frame's width and height. */
+  x: number;
+  y: number;
+  /** Width of the cropped picture as a fraction of the frame's width. */
+  width: number;
 }
 
 export type TextSize = 'small' | 'medium' | 'large';
+
+export type FontChoice = 'system' | 'serif' | 'mono' | 'rounded' | 'condensed';
 
 export interface TextStyle {
   size: TextSize;
@@ -127,6 +167,12 @@ export interface TextStyle {
   color: string;
   /** Draw a dark box behind the text for legibility. */
   background: boolean;
+  /** Module 08 (absent: system font, opaque, default box colour). */
+  font?: FontChoice;
+  /** 0-1. */
+  opacity?: number;
+  /** Colour of the box behind the text. */
+  backgroundColor?: string;
 }
 
 /** A text annotation shown over the video. */
@@ -139,6 +185,8 @@ export interface TextClip {
   /** Centre of the text, normalised to the output frame. */
   position: NormalizedPoint;
   style: TextStyle;
+  /** A callout: an arrow from the text box to this point of the frame (Module 08). */
+  callout?: { target: NormalizedPoint };
 }
 
 export type TimelineClip = MediaClip | TextClip;
@@ -154,6 +202,8 @@ export interface TimelineTrack {
   hidden?: boolean;
   /** Muted tracks are silent. */
   muted?: boolean;
+  /** Audible tracks: 0-1, applied on top of each clip's volume (the audio mix, Module 08). */
+  volume?: number;
 }
 
 export interface Timeline {
@@ -192,7 +242,60 @@ export interface ExportSettings {
 }
 
 /** Shape of the rendered video. `source` keeps the recording's own shape. */
-export type AspectRatio = 'source' | '16:9' | '9:16' | '1:1' | '4:3';
+export type AspectRatio = 'source' | '16:9' | '9:16' | '1:1' | '4:3' | 'custom';
+
+/** Custom output dimensions in pixels (with `aspectRatio: 'custom'`). */
+export interface CustomSize {
+  width: number;
+  height: number;
+}
+
+export type BackgroundFit = 'cover' | 'contain' | 'stretch' | 'tile';
+
+/** What is behind the recording (seen around it when padded, or in letterbox bars). */
+export interface BackgroundStyle {
+  kind: 'none' | 'color' | 'gradient' | 'preset' | 'image';
+  color: string;
+  gradient: { from: string; to: string; angle: number };
+  /** One of `BACKGROUND_PRESETS` (render/backgrounds.ts). */
+  presetId?: string;
+  /** An image imported into the project. */
+  imageAssetId?: string;
+  fit: BackgroundFit;
+  /** Which part of the image stays in view (cover) or where it sits (contain), 0-1. */
+  position: NormalizedPoint;
+  /** Blur of an image background, as a fraction of the frame's shorter side (0-0.05). */
+  blur: number;
+}
+
+/** How the recording sits on the background: inset, rounded corners, drop shadow. */
+export interface FrameLayout {
+  /** Space around the recording, as a fraction of the frame's shorter side (0-0.3). */
+  padding: number;
+  /** Corner radius, as a fraction of the recording's shorter side (0-0.2). */
+  radius: number;
+  /** Shadow strength, 0-1. */
+  shadow: number;
+}
+
+export type SubtitlePosition = 'bottom' | 'middle' | 'top';
+
+/** How subtitles look (all cues share it). */
+export interface SubtitleStyle {
+  /** Shown in the preview and burned into exported videos. */
+  visible: boolean;
+  font: FontChoice;
+  /** Text height as a fraction of the frame's shorter side. */
+  size: number;
+  color: string;
+  /** Box behind the text, or none. */
+  background: string | null;
+  /** 0-1. */
+  backgroundOpacity: number;
+  position: SubtitlePosition;
+  /** Distance from the top or bottom edge, as a fraction of the frame height. */
+  margin: number;
+}
 
 /** Bump when the Project shape changes; `services/storage/migrations.ts` upgrades older data. */
 export const PROJECT_SCHEMA_VERSION = 3;
@@ -208,6 +311,11 @@ export interface Project {
   aspectRatio: AspectRatio;
   /** Cursor and click overlays; absent in older projects (see `renderEffectsOf`). */
   renderEffects?: RenderEffects;
+  /** Module 08 enhancements; absent in older projects (see render/enhancements.ts for defaults). */
+  customSize?: CustomSize;
+  background?: BackgroundStyle;
+  frameLayout?: FrameLayout;
+  subtitleStyle?: SubtitleStyle;
   subtitles: SubtitleTrack[];
   /** Assets the user imported into this project (images, music, video); `MediaAsset.projectId` = this id. */
   importedAssetIds: string[];
