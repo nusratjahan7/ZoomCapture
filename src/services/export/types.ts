@@ -3,12 +3,8 @@ import type { ExportFormat, MediaAsset, Project, Recording } from '@/types';
 export type { ExportFormat };
 
 /**
- * Export contract for the export module.
- *
- * Recordings are captured as WebM (VP9/VP8 + Opus), the format Chrome's MediaRecorder writes
- * reliably. Rendering with zoom effects, overlays and the camera bubble is done by
- * `services/render/renderVideo.ts` (WebM). Other formats (MP4, GIF) are for the export module:
- * it implements `Exporter` (reading `project.exportSettings`) and registers it in `exporters.ts`.
+ * Exporting the original recording as it is (no re-encoding): the library's and the editor's
+ * **Download** button. Edited exports (MP4, WebM, GIF, PNG, JPEG) go through `exportMedia.ts`.
  */
 export interface ExportInput {
   recording: Recording;
@@ -36,7 +32,7 @@ export interface Exporter {
 
 export class ExportUnavailableError extends Error {
   constructor(format: ExportFormat) {
-    super(`${format.toUpperCase()} export requires transcoding, which is not available in this version yet.`);
+    super(`The original recording is only kept in its own format, not ${format.toUpperCase()}. Use Export video in the editor for MP4, WebM, GIF or images.`);
     this.name = 'ExportUnavailableError';
   }
 }

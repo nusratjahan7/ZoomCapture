@@ -230,15 +230,50 @@ export interface SubtitleTrack {
   cues: SubtitleCue[];
 }
 
-export type ExportFormat = 'webm' | 'mp4' | 'gif';
+/** Video files (`mp4`, `webm`), an animated GIF, or one still frame (`png`, `jpeg`). */
+export type ExportFormat = 'mp4' | 'webm' | 'gif' | 'png' | 'jpeg';
+
+/** The short side of the output (1080p → 1920×1080 landscape, 1080×1920 portrait). */
+export type ExportResolution = 'source' | '2160p' | '1440p' | '1080p' | '720p' | '480p';
+
+export type ExportFrameRate = 24 | 25 | 30 | 60;
+
+/** Video quality: three levels, or `custom` with `bitrateMbps`. */
+export type ExportQuality = 'low' | 'standard' | 'high' | 'custom';
+
+export interface GifExportSettings {
+  /** Longest side in pixels. */
+  size: number;
+  frameRate: 5 | 10 | 15 | 20 | 25;
+  /** Palette size. */
+  colors: 64 | 128 | 256;
+  /** Error-diffusion dithering: smoother gradients, larger files. */
+  dither: boolean;
+  /** Plays forever (otherwise once). */
+  loop: boolean;
+  /** Part of the timeline (ms); `endMs: null` = to the end. */
+  startMs: number;
+  endMs: number | null;
+}
 
 export interface ExportSettings {
   format: ExportFormat;
-  resolution: 'source' | '720p' | '1080p' | '1440p' | '2160p';
-  frameRate: 30 | 60;
-  quality: 'standard' | 'high';
+  /** Video and still images. */
+  resolution: ExportResolution;
+  frameRate: ExportFrameRate;
+  quality: ExportQuality;
+  /** Video bitrate with `quality: 'custom'`. */
+  bitrateMbps?: number;
   includeCamera: boolean;
+  /** Unused (subtitles follow `Project.subtitleStyle.visible`); kept for stored projects. */
   burnInSubtitles: boolean;
+  gif?: GifExportSettings;
+  /** 0.5–1. */
+  jpegQuality?: number;
+  /** Without extension; empty = the recording's name. */
+  fileName?: string;
+  /** Downloads folder (kept in memory until saved), or a file chosen first (written as it is made). */
+  saveTo?: 'downloads' | 'choose';
 }
 
 /** Shape of the rendered video. `source` keeps the recording's own shape. */

@@ -32,7 +32,7 @@ export const originalRecordingExporter: Exporter = {
   },
 };
 
-/** Registered exporters, most capable first. The export module adds a transcoding exporter here. */
+/** Exporters of the original recording (edited exports are `exportMedia.ts`). */
 const EXPORTERS: Exporter[] = [originalRecordingExporter];
 
 export function exportRecording(

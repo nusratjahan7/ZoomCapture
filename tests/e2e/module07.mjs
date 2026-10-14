@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makePdf, makeWav } from '../fixtures/makePdf.mjs';
-import { button, dialogButton, openPanel, readRecordings, recordClip, seekEditor, sleep, waitForText, waitSaved } from './lib.mjs';
+import { button, dialogButton, openPanel, readRecordings, recordClip, seekEditor, sleep, waitForText, startExport, waitSaved } from './lib.mjs';
 
 /** Page colours of the test PDF: red, green, blue, yellow. */
 const PAGES = [
@@ -286,7 +286,7 @@ export async function runModule07(test, getEnv, relaunch) {
     await editor.click('button[aria-label="Mute Screen"]');
     await waitSaved(editor);
     await (await button(editor, 'Export video')).click();
-    await (await dialogButton(editor, 'Render')).click();
+    await startExport(editor);
     await editor.waitForSelector('[data-testid=rendered-video]', { timeout: 120_000 });
     await editor.waitForFunction(() => document.querySelector('[data-testid=rendered-video]').readyState >= 1);
     assert.match(await editor.$eval('[data-testid=render-summary]', (p) => p.textContent), /audio mixed/);
@@ -298,6 +298,8 @@ export async function runModule07(test, getEnv, relaunch) {
           video.addEventListener('seeked', resolve, { once: true });
           video.currentTime = t;
         });
+        // Chrome paints an H.264 frame a moment after 'seeked': wait for it.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
         const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0);
@@ -306,7 +308,7 @@ export async function runModule07(test, getEnv, relaunch) {
         for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) sum[c] += data[i + c];
         return sum.map((value) => Math.round(value / (data.length / 4)));
       }, t);
-    assert.ok(near(await colourAt(1), PAGES[0], 60), 'page 1 in the video');
+    { const c1 = await colourAt(1); assert.ok(near(c1, PAGES[0], 60), `page 1 in the video: ${c1} vs ${PAGES[0]}`); }
     assert.ok(near(await colourAt(3), PAGES[2], 60), 'page 3 in the video');
     // The moved, cropped image: in the top-left corner of the video.
     const corner = await editor.evaluate(async (t) => {
@@ -315,6 +317,8 @@ export async function runModule07(test, getEnv, relaunch) {
         video.addEventListener('seeked', resolve, { once: true });
         video.currentTime = t;
       });
+      // Chrome paints an H.264 frame a moment after 'seeked': wait for it.
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);

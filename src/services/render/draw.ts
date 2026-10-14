@@ -181,16 +181,15 @@ function drawLayer(ctx: Context2D, content: Rect, layer: FrameImage, state: Fram
 }
 
 /** A text annotation centred on its position, wrapped to at most 80 % of the frame width. */
-function drawText(ctx: Context2D, width: number, height: number, clip: TextClip) {
-  const text = clip.text.trim();
-  if (!text) return;
+/**
+ * Where a text clip is drawn in a frame: its font size, wrapped lines and box (centre `cx`, `cy`),
+ * kept inside the frame. Also used by the preview's drag handle, so it outlines the text exactly.
+ * Sets `ctx.font` to the clip's font.
+ */
+export function textLayout(ctx: Pick<Context2D, 'font' | 'measureText'>, width: number, height: number, clip: TextClip) {
   const fontSize = Math.max(10, Math.round(Math.min(width, height) * TEXT_SIZE[clip.style.size]));
-  ctx.save();
-  ctx.globalAlpha = Math.min(1, Math.max(0, clip.style.opacity ?? 1));
   ctx.font = `700 ${fontSize}px ${FONT_STACKS[clip.style.font ?? 'system']}`;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  const lines = wrapText(ctx, text, width * 0.8);
+  const lines = wrapText(ctx as Context2D, clip.text.trim(), width * 0.8);
   const lineHeight = fontSize * 1.25;
   const padX = fontSize * 0.6;
   const padY = fontSize * 0.35;
@@ -198,6 +197,16 @@ function drawText(ctx: Context2D, width: number, height: number, clip: TextClip)
   const boxHeight = lines.length * lineHeight + padY * 2;
   const cx = Math.min(width - boxWidth / 2, Math.max(boxWidth / 2, clip.position.x * width));
   const cy = Math.min(height - boxHeight / 2, Math.max(boxHeight / 2, clip.position.y * height));
+  return { fontSize, lines, lineHeight, padY, boxWidth, boxHeight, cx, cy };
+}
+
+function drawText(ctx: Context2D, width: number, height: number, clip: TextClip) {
+  if (!clip.text.trim()) return;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, Math.max(0, clip.style.opacity ?? 1));
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const { fontSize, lines, lineHeight, padY, boxWidth, boxHeight, cx, cy } = textLayout(ctx, width, height, clip);
   if (clip.callout) drawCalloutArrow(ctx, { x: cx, y: cy, width: boxWidth, height: boxHeight }, { x: clip.callout.target.x * width, y: clip.callout.target.y * height }, fontSize, clip.style.color);
   if (clip.style.background) {
     ctx.fillStyle = clip.style.backgroundColor ?? OVERLAY_STYLE.annotationBackground;

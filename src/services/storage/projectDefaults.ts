@@ -17,7 +17,7 @@ export function zoomSettingsFrom(autoZoom: AutoZoomSettings, tracked: boolean): 
 
 export function defaultExportSettings(): ExportSettings {
   return {
-    format: 'webm',
+    format: 'mp4',
     resolution: 'source',
     frameRate: 30,
     quality: 'high',

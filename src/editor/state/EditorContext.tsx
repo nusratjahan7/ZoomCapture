@@ -25,6 +25,8 @@ export interface EditorContextValue {
   setSnapping: (on: boolean) => void;
   /** Set by the timeline panel: zooms it by a factor (+/− shortcuts), or fits it to the panel. */
   timelineZoom: MutableRefObject<(factor: number | 'fit') => void>;
+  /** Opens the export dialog: for a video or GIF, or for a still image of the frame at the playhead. */
+  openExport: (mode: 'video' | 'still') => void;
 }
 
 export const EditorContext = createContext<EditorContextValue | null>(null);

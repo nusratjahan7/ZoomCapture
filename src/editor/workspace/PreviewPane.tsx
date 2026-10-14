@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from 'react';
 import { aspectValue, timelineScene } from '@/services/render/compose';
 import { backgroundOf, frameLayoutOf, layoutRect, subtitleStyleOf } from '@/services/render/enhancements';
+import { textLayout } from '@/services/render/draw';
 import type { FrameState } from '@/services/render/frameState';
 import { TimelinePlayer } from '@/services/render/TimelinePlayer';
 import { findClip } from '@/services/timeline/model';
@@ -8,6 +9,7 @@ import { setClipTransform, updateTextClip } from '@/services/timeline/operations
 import { clampTransform } from '@/services/render/clipFrame';
 import { updateMarker } from '@/services/zoom/markers';
 import type { NormalizedPoint, TextClip } from '@/types';
+import { cn } from '@/utils/cn';
 import { formatTimecode, parseTimecode, useEditor, useEditorState, usePlayheadListener } from '../state/EditorContext';
 import { CameraHandle } from './CameraHandle';
 import { ClipFrameOverlay } from './ClipFrameOverlay';
@@ -255,9 +257,31 @@ export function Timecode() {
   );
 }
 
-/** Dashed box over the selected text; drag it (or use the arrow keys) to move the text. */
+let measure: CanvasRenderingContext2D | null = null;
+
+/**
+ * Dashed outline around the selected text (measured as the preview draws it, so the text itself
+ * stays visible); drag it, or use the arrow keys, to move the text.
+ */
 function TextHandle({ clip, onMove }: { clip: TextClip; onMove: (position: NormalizedPoint, done: boolean) => void }) {
   const dragging = useRef<{ dx: number; dy: number } | null>(null);
+  const ref = useRef<HTMLButtonElement>(null);
+  // The frame's size in CSS pixels: the text box is laid out the same way, relative to it.
+  const [frame, setFrame] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const parent = ref.current?.parentElement;
+    if (!parent) return;
+    const observer = new ResizeObserver(() => setFrame({ width: parent.clientWidth, height: parent.clientHeight }));
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, []);
+  const box = useMemo(() => {
+    if (!frame || frame.width === 0) return null;
+    measure ??= document.createElement('canvas').getContext('2d');
+    if (!measure || !clip.text.trim()) return null;
+    const layout = textLayout(measure, frame.width, frame.height, clip);
+    return { left: layout.cx - layout.boxWidth / 2, top: layout.cy - layout.boxHeight / 2, width: layout.boxWidth, height: layout.boxHeight };
+  }, [frame, clip]);
   const pointIn = (event: PointerEvent<HTMLElement>) => {
     const frame = event.currentTarget.parentElement!.getBoundingClientRect();
     return { x: (event.clientX - frame.left) / frame.width, y: (event.clientY - frame.top) / frame.height };
@@ -272,11 +296,17 @@ function TextHandle({ clip, onMove }: { clip: TextClip; onMove: (position: Norma
   };
   return (
     <button
+      ref={ref}
       type="button"
       aria-label={`Text “${clip.text}”: drag or use the arrow keys to move it`}
+      title="Drag to move the text"
       data-testid="text-handle"
-      className="absolute -translate-x-1/2 -translate-y-1/2 cursor-move touch-none rounded-md border-2 border-dashed border-accent-2 bg-accent-2/10 px-3 py-1 text-[11px] font-medium text-white shadow focus-visible:outline-2"
-      style={{ left: `${clip.position.x * 100}%`, top: `${clip.position.y * 100}%` }}
+      className={cn(
+        'absolute cursor-move touch-none rounded-md border-2 border-dashed border-accent-2 focus-visible:outline-2',
+        // Before it is measured (or for empty text): a small target at the text's position.
+        !box && 'size-6 -translate-x-1/2 -translate-y-1/2',
+      )}
+      style={box ? { left: box.left - 3, top: box.top - 3, width: box.width + 6, height: box.height + 6 } : { left: `${clip.position.x * 100}%`, top: `${clip.position.y * 100}%` }}
       onPointerDown={(event) => {
         const point = pointIn(event);
         dragging.current = { dx: clip.position.x - point.x, dy: clip.position.y - point.y };
@@ -291,8 +321,6 @@ function TextHandle({ clip, onMove }: { clip: TextClip; onMove: (position: Norma
         dragging.current = null;
       }}
       onKeyDown={onKeyDown}
-    >
-      Move text
-    </button>
+    />
   );
 }

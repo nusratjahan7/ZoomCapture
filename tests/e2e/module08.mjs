@@ -7,7 +7,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeWav } from '../fixtures/makePdf.mjs';
-import { button, dialogButton, openPanel, readRecordings, seekEditor, sleep, waitForText, waitSaved } from './lib.mjs';
+import { button, dialogButton, openPanel, readRecordings, seekEditor, sleep, waitForText, startExport, waitSaved } from './lib.mjs';
 
 function readProject(page, projectId) {
   return page.evaluate(async (id) => {
@@ -350,7 +350,7 @@ export async function runModule08(test, getEnv, relaunch) {
   await test('module 08 export: background, camera, subtitles, overlays and music in the video', async () => {
     const { editor } = state;
     await (await button(editor, 'Export video')).click();
-    await (await dialogButton(editor, 'Render')).click();
+    await startExport(editor);
     await editor.waitForSelector('[data-testid=rendered-video]', { timeout: 180_000 });
     await editor.waitForFunction(() => document.querySelector('[data-testid=rendered-video]').readyState >= 1);
     const summary = await editor.$eval('[data-testid=render-summary]', (p) => p.textContent);
@@ -365,6 +365,8 @@ export async function runModule08(test, getEnv, relaunch) {
             video.addEventListener('seeked', resolve, { once: true });
             video.currentTime = t;
           });
+          // Chrome paints an H.264 frame a moment after 'seeked': wait for it.
+          await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
           const canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
           const ctx = canvas.getContext('2d');
           ctx.drawImage(video, 0, 0);
@@ -378,7 +380,7 @@ export async function runModule08(test, getEnv, relaunch) {
         y0,
         y1,
       );
-    assert.ok(near((await lineAt(1, 0.5, 0.02, 0.02))[0], [32, 64, 255], 50), 'background in the video');
+    { const bg = (await lineAt(1, 0.5, 0.02, 0.02))[0]; assert.ok(near(bg, [32, 64, 255], 50), `background in the video: ${bg}`); }
     // The subtitle (top) is in the video while its cue is on, not after it.
     const during = await lineAt(2, 0.5, 0, 0.25);
     const later = await lineAt(4.2, 0.5, 0, 0.25);

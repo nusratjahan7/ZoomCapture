@@ -3,7 +3,7 @@
 // rendered file shows the same zoom at the same timestamps as the preview, with audio in sync.
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { button, dialogButton, openEffectsTab, openPanel, readRecordings, seekEditor, sleep, waitForText, waitSaved } from './lib.mjs';
+import { button, dialogButton, openEffectsTab, openPanel, readRecordings, seekEditor, sleep, waitForText, startExport, waitSaved } from './lib.mjs';
 
 /**
  * A page with a strongly structured picture (a coloured grid, so zoom position is measurable) that
@@ -266,7 +266,7 @@ export async function runModule05(test, getEnv, relaunch) {
     await editor.bringToFront();
     await (await button(editor, 'Export video')).click();
     await editor.waitForSelector('dialog[open]');
-    await (await dialogButton(editor, 'Render')).click();
+    await startExport(editor);
     await editor.waitForSelector('[data-testid=rendered-video]', { timeout: 120_000 });
     await editor.waitForFunction(() => document.querySelector('[data-testid=rendered-video]').readyState >= 2);
     const summary = await editor.$eval('[data-testid=render-summary]', (p) => p.textContent);

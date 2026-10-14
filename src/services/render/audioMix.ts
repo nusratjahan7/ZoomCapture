@@ -4,8 +4,8 @@
  * sets media elements to it every frame; the export turns the same values into gain automation,
  * so both sound alike.
  */
-import { clipDuration } from '@/services/timeline/model';
-import type { MediaClip, TimelineTrack } from '@/types';
+import { clipDuration, isMediaClip, isStill } from '@/services/timeline/model';
+import type { MediaAsset, MediaClip, Timeline, TimelineTrack } from '@/types';
 
 export const MAX_FADE_MS = 30_000;
 
@@ -50,4 +50,19 @@ export function gainPoints(clip: MediaClip, track: Pick<TimelineTrack, 'muted' |
   return [...times]
     .sort((a, b) => a - b)
     .map((time) => [(time - windowStart * 1000) / 1000, clipGain(clip, track, Math.min(time, end - 0.001))]);
+}
+
+/** Media clips whose sound is heard, with their asset (skips muted tracks and clips, images, silent media). */
+export function audibleClips(timeline: Timeline, assets: ReadonlyMap<string, MediaAsset>): Array<{ clip: MediaClip; asset: MediaAsset; track: TimelineTrack }> {
+  const result: Array<{ clip: MediaClip; asset: MediaAsset; track: TimelineTrack }> = [];
+  for (const track of timeline.tracks) {
+    if (track.muted || (track.volume ?? 1) <= 0 || !(track.kind === 'video' || track.kind === 'audio' || track.kind === 'music')) continue;
+    for (const clip of track.clips) {
+      if (!isMediaClip(clip) || clip.muted || (clip.volume ?? 1) <= 0) continue;
+      const asset = assets.get(clip.assetId);
+      if (!asset || isStill(asset) || asset.hasAudio === false) continue;
+      result.push({ clip, asset, track });
+    }
+  }
+  return result;
 }

@@ -1,4 +1,4 @@
-import { Check, Crop, Magnet, Move, Maximize2, Pause, Play, Plus, Scissors, SkipBack, SkipForward, Sparkles, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react';
+import { Check, Crop, ImageDown, Magnet, Move, Maximize2, Pause, Play, Plus, Scissors, SkipBack, SkipForward, Sparkles, Trash2, Type, ZoomIn, ZoomOut } from 'lucide-react';
 import { findClip, TRACK_NAMES } from '@/services/timeline/model';
 import { addTrack } from '@/services/timeline/operations';
 import { IconButton } from '@/shared/components';
@@ -35,7 +35,7 @@ function ToggleButton({ on, label, icon: Icon, text, onClick }: { on: boolean; l
  * view options (right). Groups shrink to icons and scroll sideways on narrow windows.
  */
 export function ControlBar({ options, onOptionsChange }: { options: PreviewOptions; onOptionsChange: (patch: Partial<PreviewOptions>) => void }) {
-  const { store, player, snapping, setSnapping, timelineZoom } = useEditor();
+  const { store, player, snapping, setSnapping, timelineZoom, openExport } = useEditor();
   const selection = useEditorState((snapshot) => snapshot.selection);
   const markers = useEditorState((snapshot) => snapshot.project.timeline.zoomMarkers);
   const actions = useTimelineActions();
@@ -93,6 +93,7 @@ export function ControlBar({ options, onOptionsChange }: { options: PreviewOptio
         </button>
         <IconButton icon={SkipForward} label="Go to end (End)" size="sm" className="hidden sm:inline-flex" disabled={!player} onClick={() => player && player.seek(player.duration)} />
         <Timecode />
+        <IconButton icon={ImageDown} label="Save this frame as an image (PNG or JPEG)" size="sm" disabled={!player} onClick={() => openExport('still')} />
       </div>
 
       <div className="no-scrollbar flex min-w-0 items-center justify-end gap-0.5 overflow-x-auto">

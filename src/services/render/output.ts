@@ -3,6 +3,7 @@ import type { ExportSettings } from '@/types';
 
 /** Output heights for each resolution setting; `source` keeps the recording's size. */
 export const RESOLUTION_HEIGHT: Record<Exclude<ExportSettings['resolution'], 'source'>, number> = {
+  '480p': 480,
   '720p': 720,
   '1080p': 1080,
   '1440p': 1440,
