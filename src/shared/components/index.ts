@@ -14,3 +14,4 @@ export * from './ProgressBar';
 export * from './RecordingDialogs';
 export * from './RecordingThumbnail';
 export * from './TextField';
+export { ErrorBoundary } from './ErrorBoundary';

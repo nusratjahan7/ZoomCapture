@@ -14,7 +14,9 @@ import { describeMediaError, getErrorMessage } from '@/utils/errors';
 import { formatBytes } from '@/utils/format';
 import { useMediaDevices } from '@/shared/hooks/useMediaDevices';
 import { AutoZoomSettingsPanel } from './AutoZoomSettingsPanel';
+import { CameraBubblePanel, DiagnosticsPanel, OrphanedMedia, PermissionStatus, PrivacyPanel, ProjectDefaultsPanel } from './MorePanels';
 import { NativeControlsSetting } from './NativeControlsSetting';
+import { LOW_SPACE_BYTES } from '@/services/storage/storageStatus';
 
 const RESOLUTION_OPTIONS: Array<{ value: CaptureResolution; label: string }> = [
   { value: '1080p', label: 'Up to 1080p (1920×1080)' },
@@ -157,6 +159,8 @@ export function SettingsPage() {
               onChange={(patch) => save({ autoZoom: { ...settings.autoZoom, ...patch } })}
             />
 
+            <ProjectDefaultsPanel value={settings.projectDefaults} onChange={(patch) => save({ projectDefaults: { ...settings.projectDefaults, ...patch } })} />
+
             <Panel title="Recording" description="How recording starts and how you control it.">
               <div className="space-y-5">
                 <Field label="Countdown" description="Time to get ready after pressing Start recording.">
@@ -212,10 +216,14 @@ export function SettingsPage() {
                     onCheckedChange={(microphoneEnabled) => save({ microphoneEnabled })}
                   />
                 </div>
+                <PermissionStatus />
                 {inventory && !inventory.labelsAvailable && (
                   <p className="text-xs text-fg-subtle">
                     Chrome hides device names until ZoomCapture is allowed to use your camera and microphone.
                   </p>
+                )}
+                {inventory && inventory.labelsAvailable && inventory.cameras.length === 0 && inventory.microphones.length === 0 && (
+                  <p className="text-xs text-warning">No camera or microphone is connected. Recordings will have only the screen and its sound.</p>
                 )}
                 <div className="grid gap-5 sm:grid-cols-2">
                   <Select
@@ -235,6 +243,8 @@ export function SettingsPage() {
                 </div>
               </div>
             </Panel>
+
+            <CameraBubblePanel value={settings.cameraBubble} onChange={(cameraBubble) => save({ cameraBubble })} />
 
             <Panel
               title="Storage"
@@ -279,7 +289,16 @@ export function SettingsPage() {
                   : 'The browser may clear site data under severe storage pressure; download recordings you want to keep.'}{' '}
                 ZoomCapture itself never deletes recordings unless you ask it to.
               </p>
+              {storage?.usage !== undefined && storage.quota !== undefined && storage.quota - storage.usage < LOW_SPACE_BYTES && (
+                <p role="alert" className="mt-3 rounded-lg bg-warning/10 p-3 text-xs text-warning">
+                  Less than {formatBytes(LOW_SPACE_BYTES)} is left. New recordings and imports may fail: free space on the disk, or download and delete recordings you no longer need.
+                </p>
+              )}
+              <OrphanedMedia />
             </Panel>
+
+            <PrivacyPanel />
+            <DiagnosticsPanel />
 
             <div className="flex justify-end">
               <Button variant="ghost" icon={RotateCcw} onClick={() => setConfirmReset(true)}>

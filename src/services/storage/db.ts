@@ -47,6 +47,40 @@ export type ZoomCaptureDatabase = IDBPDatabase<ZoomCaptureDB>;
 
 let dbPromise: Promise<ZoomCaptureDatabase> | undefined;
 
+/** Every store and index the current schema must have (checked each time the database opens). */
+export const EXPECTED_SCHEMA: Record<StoreNames<ZoomCaptureDB>, string[]> = {
+  recordings: ['by-created'],
+  projects: ['by-recording', 'by-updated'],
+  assets: ['by-project', 'by-recording'],
+  assetBlobs: [],
+  recordingDrafts: [],
+  recordingChunks: [],
+};
+
+/** The database's structure doesn't match this version (e.g. a migration was interrupted or data was edited by hand). */
+export class SchemaError extends Error {
+  constructor(readonly problems: string[]) {
+    super(`The local database is incomplete (${problems.join('; ')}). Your recordings were not changed. Reload the page; if this continues, copy the diagnostic report from Settings.`);
+    this.name = 'SchemaError';
+  }
+}
+
+/** What is missing from an open database (empty when it is complete). */
+export function schemaProblems(db: IDBDatabase | ZoomCaptureDatabase): string[] {
+  const problems: string[] = [];
+  const names = [...db.objectStoreNames] as string[];
+  for (const [store, indexes] of Object.entries(EXPECTED_SCHEMA)) {
+    if (!names.includes(store)) {
+      problems.push(`store “${store}” missing`);
+      continue;
+    }
+    const tx = (db as IDBDatabase).transaction(store);
+    const present = [...tx.objectStore(store).indexNames];
+    for (const index of indexes) if (!present.includes(index)) problems.push(`index “${store}.${index}” missing`);
+  }
+  return problems;
+}
+
 export function getDb(): Promise<ZoomCaptureDatabase> {
   dbPromise ??= openDB<ZoomCaptureDB>(DB_NAME, DB_VERSION, {
     upgrade(db, oldVersion, _newVersion, transaction) {
@@ -60,10 +94,21 @@ export function getDb(): Promise<ZoomCaptureDatabase> {
       // The browser closed the connection (e.g. storage cleared); reopen on next use.
       dbPromise = undefined;
     },
-  }).catch((error: unknown) => {
-    dbPromise = undefined;
-    throw error;
-  });
+  })
+    .then((db) => {
+      // Upgrades run in one transaction, so a schema is either fully migrated or not at all; this
+      // catches anything else (hand edits, a browser bug) with a clear message instead of odd failures.
+      const problems = schemaProblems(db);
+      if (problems.length > 0) {
+        db.close();
+        throw new SchemaError(problems);
+      }
+      return db;
+    })
+    .catch((error: unknown) => {
+      dbPromise = undefined;
+      throw error;
+    });
   return dbPromise;
 }
 

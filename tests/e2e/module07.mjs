@@ -223,7 +223,20 @@ export async function runModule07(test, getEnv, relaunch) {
     await editor.waitForSelector('[data-testid=preview-stage] video');
     await openPanel(editor, 'Media');
     for (const name of ['Slides.pdf', 'Screenshot.png', 'Narration.wav', 'Voiceover 1.webm']) await waitForText(editor, name);
-    assert.ok(near(await previewColour(editor, 3000), PAGES[2]), 'page 3 still shown after reopening');
+    // After a reload pdf.js starts cold: the page appears once decoded (the preview redraws then).
+    let colour = await previewColour(editor, 3000);
+    for (let i = 0; i < 40 && !near(colour, PAGES[2]); i++) {
+      await sleep(250);
+      colour = await editor.evaluate(() => {
+        const canvas = document.querySelector('[data-testid=zoom-canvas]');
+        const { width, height } = canvas;
+        const data = canvas.getContext('2d').getImageData(Math.round(width * 0.55), Math.round(height * 0.3), Math.round(width * 0.3), Math.round(height * 0.2)).data;
+        const sum = [0, 0, 0];
+        for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) sum[c] += data[i + c];
+        return sum.map((value) => Math.round(value / (data.length / 4)));
+      });
+    }
+    assert.ok(near(colour, PAGES[2]), `page 3 still shown after reopening: ${colour}`);
     const project = await readProject(editor, recording.projectId);
     assert.equal(project.importedAssetIds.length, 4);
   });

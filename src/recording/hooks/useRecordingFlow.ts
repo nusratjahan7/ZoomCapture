@@ -178,6 +178,7 @@ export function useRecordingFlow(inputs: FlowInputs, callbacks: FlowCallbacks) {
         cameraLayout: settings.cameraBubble,
         clickTracking,
         autoZoom: settings.autoZoom,
+        projectDefaults: settings.projectDefaults,
         onTrackEnded: (kind) => {
           callbacksRef.current.onTrackEnded(kind);
           if (kind === 'screen') void stop();

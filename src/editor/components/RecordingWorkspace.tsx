@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, FileQuestion, Loader2 } from 'lucide-react';
+import { ArrowLeft, FileQuestion, Loader2, Wrench } from 'lucide-react';
 import { subscribeLibrary } from '@/services/storage/libraryEvents';
-import { getRecordingDetails, type RecordingDetails } from '@/services/storage/recordingRepository';
-import { buttonClassName, EmptyState } from '@/shared/components';
+import { rebuildProject } from '@/services/storage/libraryRepository';
+import { getRecordingDetails, MissingProjectError, type RecordingDetails } from '@/services/storage/recordingRepository';
+import { Button, buttonClassName, EmptyState } from '@/shared/components';
 import { describeStorageError } from '@/utils/storageErrors';
 import { EditorWorkspace } from '../workspace/EditorWorkspace';
 import { EditorHeader } from './EditorHeader';
@@ -10,6 +11,7 @@ import { EditorHeader } from './EditorHeader';
 type LoadState =
   | { status: 'loading' }
   | { status: 'missing' }
+  | { status: 'no-project' }
   | { status: 'error'; message: string }
   | { status: 'ready'; details: RecordingDetails };
 
@@ -17,14 +19,15 @@ type LoadState =
  * Loads a recording and reloads it when another page renames or deletes it. Project edits are
  * owned by the open editor (it saves them itself), so project changes don't trigger a reload.
  */
-function useRecordingDetails(recordingId: string): LoadState {
+function useRecordingDetails(recordingId: string): [LoadState, () => void] {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
     const load = () =>
       getRecordingDetails(recordingId).then(
         (details) => active && setState(details ? { status: 'ready', details } : { status: 'missing' }),
-        (error: unknown) => active && setState({ status: 'error', message: describeStorageError(error) }),
+        (error: unknown) => active && setState(error instanceof MissingProjectError ? { status: 'no-project' } : { status: 'error', message: describeStorageError(error) }),
       );
     void load();
     const unsubscribe = subscribeLibrary((change) => {
@@ -34,8 +37,8 @@ function useRecordingDetails(recordingId: string): LoadState {
       active = false;
       unsubscribe();
     };
-  }, [recordingId]);
-  return state;
+  }, [recordingId, attempt]);
+  return [state, () => setAttempt((n) => n + 1)];
 }
 
 const backLink = (
@@ -46,7 +49,8 @@ const backLink = (
 );
 
 export function RecordingWorkspace({ recordingId }: { recordingId: string }) {
-  const state = useRecordingDetails(recordingId);
+  const [state, reload] = useRecordingDetails(recordingId);
+  const [rebuilding, setRebuilding] = useState<string | null>(null);
 
   if (state.status !== 'ready') {
     return (
@@ -55,6 +59,29 @@ export function RecordingWorkspace({ recordingId }: { recordingId: string }) {
         <main className="flex min-h-[70vh] items-center justify-center p-6">
           {state.status === 'loading' ? (
             <Loader2 size={28} aria-label="Loading recording" className="animate-spin text-fg-subtle" />
+          ) : state.status === 'no-project' ? (
+            <EmptyState
+              icon={Wrench}
+              title="This recording’s project is missing"
+              description={
+                rebuilding ??
+                'The recording and its media are safe, but its edits couldn’t be found (for example after an interrupted operation). Rebuild the project to edit it again: the timeline is made from the recording, as when it was saved.'
+              }
+              action={
+                <div className="flex gap-2">
+                  {backLink}
+                  <Button
+                    variant="primary"
+                    icon={Wrench}
+                    onClick={() =>
+                      void rebuildProject(recordingId).then(reload, (error: unknown) => setRebuilding(`Could not rebuild it: ${describeStorageError(error)}`))
+                    }
+                  >
+                    Rebuild project
+                  </Button>
+                </div>
+              }
+            />
           ) : (
             <EmptyState
               icon={FileQuestion}

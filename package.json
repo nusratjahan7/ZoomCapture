@@ -1,7 +1,7 @@
 {
   "name": "zoomcapture",
   "private": true,
-  "version": "0.9.0",
+  "version": "1.0.0",
   "description": "ZoomCapture — professional screen recorder with automatic zoom effects (Chrome Extension, Manifest V3).",
   "type": "module",
   "scripts": {

@@ -24,6 +24,9 @@ export function Dialog({ open, onClose, title, description, children, footer, si
   const titleId = useId();
   const descriptionId = useId();
 
+  const openRef = useRef(open);
+  openRef.current = open;
+
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
@@ -36,7 +39,19 @@ export function Dialog({ open, onClose, title, description, children, footer, si
       ref={ref}
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
-      onClose={onClose}
+      // Escape asks the owner, which decides (e.g. an export in progress is cancelled, not hidden).
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClose={() => {
+        onClose();
+        // Closed by the browser anyway (e.g. Escape pressed twice): shown again if the owner keeps it open.
+        requestAnimationFrame(() => {
+          const dialog = ref.current;
+          if (openRef.current && dialog && !dialog.open && dialog.isConnected) dialog.showModal();
+        });
+      }}
       onClick={(event) => {
         if (event.target === ref.current) onClose();
       }}
@@ -69,8 +84,9 @@ export function Dialog({ open, onClose, title, description, children, footer, si
             <X size={15} aria-hidden />
           </button>
         </div>
-        {children && <div className="mt-4">{children}</div>}
-        {footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
+        {/* Contents only while open: closed dialogs don't re-render (or keep state) with every edit. */}
+        {open && children && <div className="mt-4">{children}</div>}
+        {open && footer && <div className="mt-5 flex justify-end gap-2">{footer}</div>}
       </div>
     </dialog>
   );

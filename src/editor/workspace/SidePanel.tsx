@@ -18,6 +18,7 @@ import { CaptionsPanel } from './panels/CaptionsPanel';
 import { OverlaysPanel } from './panels/OverlaysPanel';
 import { CursorSettings, PropertiesContent } from './PropertiesPanel';
 import { useTimelineActions } from './useTimelineActions';
+import { ErrorBoundary } from '@/shared/components/ErrorBoundary';
 
 export type SideTab = 'media' | 'background' | 'camera' | 'audio' | 'text' | 'captions' | 'zoom' | 'cursor' | 'edit';
 
@@ -94,6 +95,8 @@ export function SidePanel({
         <IconButton icon={PanelLeftClose} label="Hide panel" size="sm" tooltipAlign="end" onClick={onClose} />
       </header>
       <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
+        {/* Keyed by tab: an error in one panel shows there; another tab starts fresh. */}
+        <ErrorBoundary key={tab} area={`panel:${tab}`} compact>
         {tab === 'media' && <MediaLibrary keepTab={keepTab} />}
         {tab === 'background' && <BackgroundPanel />}
         {tab === 'camera' && <CameraPanel />}
@@ -103,6 +106,7 @@ export function SidePanel({
         {tab === 'zoom' && <ZoomTab keepTab={keepTab} />}
         {tab === 'cursor' && <CursorSettings />}
         {tab === 'edit' && <PropertiesContent />}
+        </ErrorBoundary>
       </div>
     </aside>
   );

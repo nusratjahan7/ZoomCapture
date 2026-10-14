@@ -38,6 +38,8 @@ export interface RecordingControllerOptions {
   clickTracking: ClickTrackingInfo;
   /** Applied when the recording is saved (automatic zoom markers). */
   autoZoom: AutoZoomSettings;
+  /** Default export size and shape for the new project (Settings). */
+  projectDefaults?: RecordingDraft['projectDefaults'];
   /** A source track ended by itself (sharing stopped, device unplugged…). */
   onTrackEnded: (kind: RecordingTrackKind) => void;
   /** Recording cannot continue (recorder failure, storage full…). */
@@ -92,6 +94,7 @@ export class RecordingController {
       cursor: [],
       clickTracking: options.clickTracking,
       autoZoom: options.autoZoom,
+      projectDefaults: options.projectDefaults,
       source: options.source,
       createdAt: now,
       updatedAt: now,

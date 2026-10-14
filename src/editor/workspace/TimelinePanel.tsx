@@ -1,5 +1,5 @@
 import { updateMarkerOnTimeline } from '@/services/timeline/attachment';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -556,21 +556,25 @@ export function TimelinePanel() {
   );
 }
 
-function TrackHeader({
-  track,
-  height,
-  first,
-  last,
-  onMenu,
-  ...rest
-}: {
+type TrackHeaderProps = {
   track: TimelineTrack;
   height: number;
   first: boolean;
   last: boolean;
   onMenu: (rect: DOMRect, items: MenuState['items']) => void;
   'data-row'?: number;
-}) {
+};
+
+/**
+ * Re-rendered only when its own track (or place) changes, not on every edit elsewhere in the
+ * timeline. `onMenu` is left out of the comparison: it only reads the track's name, which is in `track`.
+ */
+const TrackHeader = memo(
+  TrackHeaderContent,
+  (a, b) => a.track === b.track && a.height === b.height && a.first === b.first && a.last === b.last && a['data-row'] === b['data-row'],
+);
+
+function TrackHeaderContent({ track, height, first, last, onMenu, ...rest }: TrackHeaderProps) {
   const { store } = useEditor();
   const Icon = TRACK_ICONS[track.kind];
   const visual = track.kind !== 'audio' && track.kind !== 'music';
@@ -668,7 +672,9 @@ function Lane({
       aria-label={label}
       data-track-id={trackId}
       data-testid={testId}
-      className={cn('relative border-b border-line/70', dim && 'opacity-50', highlight && 'bg-accent/5')}
+      // `isolate`: a selected clip's z-index lifts it above its neighbours in this lane only, never
+      // above the sticky ruler when the timeline scrolls vertically.
+      className={cn('relative isolate border-b border-line/70', dim && 'opacity-50', highlight && 'bg-accent/5')}
       style={{ height }}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget && event.button === 0) onBackground(event);
