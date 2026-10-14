@@ -172,7 +172,7 @@ function CueRow({
 function CompactTime({ label, value, onCommit, onNow }: { label: string; value: number; onCommit: (ms: number) => void; onNow: () => void }) {
   return (
     <div className="min-w-0 [&_label]:text-[10px]">
-      <TimeField label={label} value={value} onCommit={onCommit} />
+      <TimeField label={label} value={value} onCommit={onCommit} stacked />
       <button type="button" onClick={onNow} className="mt-0.5 text-[10px] text-fg-subtle underline hover:text-fg">
         Set to playhead
       </button>
