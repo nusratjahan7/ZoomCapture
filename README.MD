@@ -12,6 +12,42 @@ Release notes, the QA results, known limitations and the Chrome Web Store checkl
 
 ---
 
+## Install from GitHub Releases
+
+No build tools needed: each release has a ready-to-load ZIP.
+
+1. Open the [**Releases** page](https://github.com/nusratjahan7/ZoomCapture/releases/latest) and, under **Assets**, download **`ZoomCapture-vX.Y.Z.zip`** (not the "Source code" archives).
+2. Extract the ZIP to a folder you will **keep**, for example `Documents\ZoomCapture`. Chrome loads the extension from this folder every time it starts, so don't delete or move it. Don't leave it in Downloads if you clean that folder out.
+3. Open `chrome://extensions` (or `edge://extensions` in Microsoft Edge).
+4. Turn on **Developer mode** (top right).
+5. Click **Load unpacked** and choose the extracted folder: the one that **contains `manifest.json`**. If Chrome says the manifest is missing, you picked the folder above it.
+6. Click the puzzle-piece icon in the toolbar, pin **ZoomCapture**, then click its icon to start recording.
+
+Chrome 120 or newer is required. Camera, microphone and screen access are asked for by Chrome the first time you use them.
+
+**Check the download (optional):** each release also has `ZoomCapture-vX.Y.Z.zip.sha256`. Compare the value in it with `Get-FileHash ZoomCapture-vX.Y.Z.zip -Algorithm SHA256` (Windows PowerShell), `shasum -a 256 ZoomCapture-vX.Y.Z.zip` (macOS) or `sha256sum ZoomCapture-vX.Y.Z.zip` (Linux).
+
+**Windows controls helper (optional):** to keep the recording controls on screen but out of entire-screen recordings, turn on *On screen, but not in the video* in ZoomCapture's Settings. Settings shows a command to run in PowerShell **from the extracted ZoomCapture folder**; the installer it runs (`native\windows\install.ps1`) is included in the ZIP.
+
+### Updating to a newer version
+
+Chrome doesn't update extensions loaded this way, so updating is done by hand. Your recordings and settings are kept **as long as the extension is loaded from the same folder**: Chrome stores them under an extension ID that comes from the folder's location.
+
+1. Download the new `ZoomCapture-vX.Y.Z.zip` from [Releases](https://github.com/nusratjahan7/ZoomCapture/releases/latest).
+2. Close any open ZoomCapture tabs (studio, editor, settings). Don't update during a recording or an export.
+3. In your existing ZoomCapture folder, delete the old files, then extract the new ZIP **into the same folder**. Check `manifest.json` is directly inside it again.
+4. Open `chrome://extensions` and click the **Reload** arrow on ZoomCapture's card. The card shows the new version number.
+
+> **Don't click Remove to update.** Removing the extension deletes all its recordings and projects. Loading the new version from a *different* folder installs a second copy with a new ID and empty storage; your recordings stay with the old copy, so remove it only after downloading anything you want to keep.
+
+If the Windows controls helper is installed, run its install command from Settings again after updating, in case the helper changed.
+
+### Uninstalling
+
+Download any recordings or exports you want to keep. Then click **Remove** on ZoomCapture's card in `chrome://extensions`; Chrome deletes the extension's data. If you installed the Windows controls helper, also run `powershell -ExecutionPolicy Bypass -File native\windows\install.ps1 -Uninstall` from the ZoomCapture folder. Then delete the folder.
+
+---
+
 ## Requirements
 
 - Node.js 20.19+ (tested with Node 24) and npm
@@ -31,6 +67,40 @@ npm run test:e2e     # build, then drive the real extension in Chrome for Testin
 ```
 
 `npm run test:e2e` uses `CHROME_PATH` if set, otherwise the Chrome for Testing installed by `test:e2e:install`. The extension is loaded over the DevTools protocol, so an installed Chrome works too, e.g. `CHROME_PATH="C:/Program Files/Google/Chrome/Application/chrome.exe"` (useful where Windows blocks the downloaded Chrome for Testing). `node tests/e2e/screenshots.mjs` saves editor screenshots at several window sizes to `.cache/screenshots/`.
+
+## Releasing a new version
+
+Releases are built by GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) when a version tag such as `v1.0.1` is pushed. Nothing is published unless you push a tag.
+
+**Version numbers:** `vMAJOR.MINOR.PATCH`. Bump PATCH for fixes (`v1.0.1`), MINOR for new features (`v1.1.0`) and MAJOR for big or incompatible changes (`v2.0.0`). Chrome accepts only numbers and dots in an extension's version, so pre-release tags like `v1.1.0-beta` are not used. The tag must equal the version in `package.json` and `public/manifest.json`, or the workflow stops.
+
+**Commands:**
+
+```bash
+npm run version:set -- 1.0.1   # sets the version in package.json, package-lock.json and public/manifest.json (no git commands)
+npm run package                # typecheck, build, then release/ZoomCapture-v1.0.1.zip + .sha256
+npm run package:verify         # extract that ZIP with the system's unzip tool, load it into Chrome, record a test clip
+```
+
+`npm run package` refuses a build with mismatched versions, missing files, source maps, sources, `.env` files or keys. It reads the ZIP back byte-for-byte, and it produces the same bytes for the same build. The ZIP contains `dist/` (with `manifest.json` at its root) and the two files of the optional Windows helper, under `native/windows/`. For the Chrome Web Store, `node scripts/package.mjs --store` makes `ZoomCapture-v1.0.1-webstore.zip` without the helper.
+
+**Steps for each release:**
+
+1. Update the code on `main` and check it: `npm test`, and `npm run test:e2e` when recording, editing or export changed.
+2. `npm run version:set -- 1.0.1`.
+3. Write the release notes: copy [docs/releases/TEMPLATE.md](docs/releases/TEMPLATE.md) to `docs/releases/v1.0.1.md` and fill it in. The workflow uses this file as the release text and fails without it.
+4. Optional: run `npm run package && npm run package:verify` locally, and load the extracted ZIP once with **Load unpacked** to try it by hand.
+5. Commit the version change and the notes, then push.
+6. Tag that commit and push the tag:
+   ```bash
+   git tag -a v1.0.1 -m "ZoomCapture v1.0.1"
+   git push origin v1.0.1
+   ```
+7. Watch the **Release** run in the repository's **Actions** tab. It runs the unit tests, builds, packages, installs the ZIP into Chrome and records a test clip. Then it creates the release **ZoomCapture v1.0.1**, with the notes and both files attached.
+
+To try the workflow without releasing, use **Actions → Release → Run workflow**: everything runs except the release, and the ZIP is available under the run's **Artifacts**. If a run fails after the tag is pushed, fix the problem, then move the tag: `git tag -d v1.0.1 && git push origin :refs/tags/v1.0.1`, then tag and push again. If the release already exists, a new run replaces its files.
+
+**Repository settings:** the workflow uses the built-in `GITHUB_TOKEN` (no secrets to add). If your organization restricts it, allow *Read and write permissions* under **Settings → Actions → General → Workflow permissions**.
 
 ## Load in Chrome
 
@@ -655,12 +725,17 @@ ZoomCapture/
 │   ├── fixtures/makePdf.mjs                           # test PDFs (coloured, numbered pages) and WAV tones
 │   └── native/{run,extension}.mjs, probe.ps1           # Windows controls helper on the real desktop
 ├── PRIVACY.md                  # privacy policy (Chrome Web Store)
-├── docs/RELEASE.md             # release notes, QA results, limitations, store checklist
+├── docs/RELEASE.md             # 1.0 QA report: feature checklist, results, limitations, store checklist
 ├── public/                     # copied verbatim into dist/
 │   ├── manifest.json           # Manifest V3
 │   └── icons/icon-{16,32,48,128}.png
 ├── native/windows/             # optional controls helper: ZoomCaptureControls.cs, install.ps1
 ├── scripts/generate-icons.mjs  # dependency-free PNG icon generator
+├── scripts/package.mjs         # `npm run package`: release ZIP + checksum, with checks
+├── scripts/verify-package.mjs  # `npm run package:verify`: extract, load in Chrome, record a clip
+├── scripts/set-version.mjs     # `npm run version:set`: version in package.json, lock file, manifest
+├── .github/workflows/release.yml   # tag v*.*.* → build, test, package, GitHub Release
+├── docs/releases/              # release notes per version (vX.Y.Z.md) and TEMPLATE.md
 ├── scripts/dev.mjs             # `npm run dev`: watches pages and the content script
 └── src/
     ├── content/clickTracker.ts # click tracker, injected on demand (built as one IIFE file)

@@ -261,8 +261,12 @@ export async function renderProject(job: RenderJob, settings: RenderSettings, op
     await output.start();
 
     const times = frameTimestamps(durationSeconds, settings.frameRate);
+    // When one side fails, the other stops at its next frame or sample; both finish before the
+    // renderer is closed, so no frame is still being decoded while it is released.
+    let stopped = false;
     const pumpVideo = async () => {
       for (const [index, timestamp] of times.entries()) {
+        if (stopped) return;
         throwIfAborted(signal);
         checkSize();
         await renderer.render(timestamp * 1000);
@@ -275,6 +279,7 @@ export async function renderProject(job: RenderJob, settings: RenderSettings, op
       if (!audioSamples || !audioSource) return;
       for await (const sample of audioSamples) {
         try {
+          if (stopped) return;
           throwIfAborted(signal);
           await audioSource.add(sample);
         } finally {
@@ -284,7 +289,16 @@ export async function renderProject(job: RenderJob, settings: RenderSettings, op
       audioSource.close();
     };
 
-    await Promise.all([pumpVideo(), pumpAudio()]);
+    const pumps = await Promise.allSettled(
+      [pumpVideo(), pumpAudio()].map((pump) =>
+        pump.catch((error: unknown) => {
+          stopped = true;
+          throw error;
+        }),
+      ),
+    );
+    const failure = pumps.find((pump) => pump.status === 'rejected');
+    if (failure) throw failure.reason;
     throwIfAborted(signal);
     checkSize();
     onProgress?.({ frame: times.length, frames: times.length, fraction: 1, stage: 'finalizing' });

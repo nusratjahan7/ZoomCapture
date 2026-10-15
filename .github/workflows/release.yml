@@ -1,0 +1,104 @@
+# Builds ZoomCapture and attaches the installable ZIP to a GitHub Release.
+#
+# - Pushing a tag like v1.0.1 (matching the version in package.json and the manifest) runs the unit
+#   tests, builds, packages, installs the ZIP into Chrome as Load unpacked would, records a test
+#   clip, then creates the release "ZoomCapture v1.0.1" with docs/releases/v1.0.1.md as its notes
+#   and the ZIP and its checksum attached.
+# - "Run workflow" (Actions tab) does everything except the release: the ZIP is kept as the run's
+#   artifact, to try before tagging.
+#
+# See README → "Releasing a new version".
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build, test and package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Empty when run by hand: then nothing is compared with a tag.
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check the release notes exist
+        if: env.RELEASE_TAG != ''
+        run: |
+          if [ ! -f "docs/releases/$RELEASE_TAG.md" ]; then
+            echo "::error::docs/releases/$RELEASE_TAG.md is missing. Add release notes for $RELEASE_TAG, commit them and tag again."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      # Typecheck, production build, then the ZIP (checks the tag matches the version).
+      - name: Build and package
+        run: npm run package
+
+      # Ubuntu 24.04 blocks the user namespaces Chrome's sandbox needs; this re-allows them for the job.
+      - name: Prepare Chrome
+        run: |
+          echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          npm run test:e2e:install
+
+      - name: Install the ZIP in Chrome and record a test clip
+        run: npm run package:verify
+
+      - name: Add the release notes
+        if: env.RELEASE_TAG != ''
+        run: cp "docs/releases/$RELEASE_TAG.md" release/notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zoomcapture-package
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish the GitHub Release
+    needs: package
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: zoomcapture-package
+          path: release
+
+      - name: Create the release (or update its files if it exists)
+        run: |
+          files=("release/ZoomCapture-$TAG.zip" "release/ZoomCapture-$TAG.zip.sha256")
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --verify-tag --title "ZoomCapture $TAG" --notes-file release/notes.md
+          fi

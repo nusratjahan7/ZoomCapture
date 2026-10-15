@@ -62,11 +62,27 @@ export class FrameCursor<T extends HoldableFrame> {
   private current: T | null = null;
   private next: IteratorResult<T> | null = null;
   private last = Number.NEGATIVE_INFINITY;
+  /** Operations run one at a time: a `close()` during a decode waits for it, so no frame decoded after closing is left unclosed. */
+  private queue: Promise<unknown> = Promise.resolve();
   restarts = 0;
 
   constructor(private readonly open: () => AsyncIterator<T>) {}
 
-  async frameAt(seconds: number): Promise<T | null> {
+  frameAt(seconds: number): Promise<T | null> {
+    return this.serial(() => this.advance(seconds));
+  }
+
+  close(): Promise<void> {
+    return this.serial(() => this.release());
+  }
+
+  private serial<R>(operation: () => Promise<R>): Promise<R> {
+    const result = this.queue.then(operation);
+    this.queue = result.catch(() => undefined);
+    return result;
+  }
+
+  private async advance(seconds: number): Promise<T | null> {
     if (!this.iterator || seconds < this.last - 1e-6) await this.restart();
     this.last = seconds;
     while (this.next && !this.next.done && this.next.value.timestamp <= seconds + 1e-6) {
@@ -78,18 +94,19 @@ export class FrameCursor<T extends HoldableFrame> {
     return shown ? shown.clone() : null;
   }
 
-  async close(): Promise<void> {
+  private async release(): Promise<void> {
     this.current?.close();
     this.current = null;
     if (this.next && !this.next.done) this.next.value.close();
     this.next = null;
-    await this.iterator?.return?.(undefined);
+    const iterator = this.iterator;
     this.iterator = null;
+    await iterator?.return?.(undefined);
   }
 
   private async restart() {
     if (this.iterator) this.restarts += 1;
-    await this.close();
+    await this.release();
     this.iterator = this.open();
     this.next = await this.iterator.next();
   }
@@ -134,6 +151,8 @@ export async function createFrameRenderer(job: RenderJob, options: { includeCame
   let content: Rect = { x: 0, y: 0, ...source };
   let backgroundImage: ImageBitmap | null = null;
   let closed = false;
+  /** The frame being drawn: `close()` waits for it, so nothing is decoded or cached after closing. */
+  let drawing: Promise<void> | null = null;
 
   const stillSource = (clip: MediaClip): StillSource | null => {
     const asset = assetMap.get(clip.assetId);
@@ -180,6 +199,7 @@ export async function createFrameRenderer(job: RenderJob, options: { includeCame
   const close = async () => {
     if (closed) return;
     closed = true;
+    await drawing?.catch(() => undefined);
     for (const cursor of cursors.values()) await cursor.close().catch(() => undefined);
     cursors.clear();
     for (const input of inputs.values()) input.dispose();
@@ -264,44 +284,50 @@ export async function createFrameRenderer(job: RenderJob, options: { includeCame
       }
       return canvas;
     },
-    async render(timeMs) {
-      if (!ctx) throw new RenderError('The renderer is not started.', 'failed');
-      const visuals = activeVisuals(timeline, timeMs);
-      // Decoded frames, in layer order (null where nothing can be shown); images are drawn as they are.
-      const layers: Array<VideoSample | ImageBitmap | null> = [];
-      let camera: VideoSample | null = null;
-      try {
-        for (const { track, clip, sourceMs } of visuals.layers) {
-          const still = stillSource(clip);
-          layers.push(still ? await stills.get(still, content) : await frameOf(track.id, clip, sourceMs));
-        }
-        if (visuals.camera && includeCamera) camera = await frameOf(visuals.camera.track.id, visuals.camera.clip, visuals.camera.sourceMs);
-        // VideoFrames from `toCanvasImageSource` must be used immediately: converted right here.
-        drawFrame(
-          ctx,
-          size.width,
-          size.height,
-          {
-            layers: layers.map((layer, index) => {
-              const image = layer instanceof ImageBitmap ? { image: layer, width: layer.width, height: layer.height } : frameImage(layer);
-              const { clip } = visuals.layers[index]!;
-              return image && { ...image, transform: clip.transform, opacity: clip.opacity };
-            }),
-            camera: frameImage(camera),
-            cameraLayout: project.cameraLayout,
-            texts: visuals.texts,
-            content,
-            background: { style: background, image: backgroundImage && { image: backgroundImage, width: backgroundImage.width, height: backgroundImage.height } },
-            frameLayout,
-            subtitles: { lines: activeCues(project, timeMs).map((cue) => cue.text), style: subtitleStyle },
-          },
-          frameStateAt(scene, timeMs),
-        );
-      } finally {
-        for (const layer of layers) if (layer && !(layer instanceof ImageBitmap)) layer.close();
-        camera?.close();
-      }
+    render(timeMs) {
+      if (closed) return Promise.reject(new RenderError('The renderer is closed.', 'failed'));
+      drawing = draw(timeMs);
+      return drawing;
     },
     close,
   };
+
+  async function draw(timeMs: number): Promise<void> {
+    if (!ctx) throw new RenderError('The renderer is not started.', 'failed');
+    const visuals = activeVisuals(timeline, timeMs);
+    // Decoded frames, in layer order (null where nothing can be shown); images are drawn as they are.
+    const layers: Array<VideoSample | ImageBitmap | null> = [];
+    let camera: VideoSample | null = null;
+    try {
+      for (const { track, clip, sourceMs } of visuals.layers) {
+        const still = stillSource(clip);
+        layers.push(still ? await stills.get(still, content) : await frameOf(track.id, clip, sourceMs));
+      }
+      if (visuals.camera && includeCamera) camera = await frameOf(visuals.camera.track.id, visuals.camera.clip, visuals.camera.sourceMs);
+      // VideoFrames from `toCanvasImageSource` must be used immediately: converted right here.
+      drawFrame(
+        ctx,
+        size.width,
+        size.height,
+        {
+          layers: layers.map((layer, index) => {
+            const image = layer instanceof ImageBitmap ? { image: layer, width: layer.width, height: layer.height } : frameImage(layer);
+            const { clip } = visuals.layers[index]!;
+            return image && { ...image, transform: clip.transform, opacity: clip.opacity };
+          }),
+          camera: frameImage(camera),
+          cameraLayout: project.cameraLayout,
+          texts: visuals.texts,
+          content,
+          background: { style: background, image: backgroundImage && { image: backgroundImage, width: backgroundImage.width, height: backgroundImage.height } },
+          frameLayout,
+          subtitles: { lines: activeCues(project, timeMs).map((cue) => cue.text), style: subtitleStyle },
+        },
+        frameStateAt(scene, timeMs),
+      );
+    } finally {
+      for (const layer of layers) if (layer && !(layer instanceof ImageBitmap)) layer.close();
+      camera?.close();
+    }
+  }
 }

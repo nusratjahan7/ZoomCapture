@@ -90,6 +90,10 @@ Bugs found and fixed while building and testing Modules 06–10 (earlier modules
 | Reliability | A damaged project crashed the editor page to a blank screen | Error boundary with recovery advice and a diagnostic report |
 | Reliability | A recording without its project record could not be opened at all | **Rebuild project** in the dashboard and editor |
 | Reliability | The dashboard would fail entirely if one project record was malformed | Listing tolerates damaged records |
+| Editor | A selected clip covered the time ruler when the timeline was scrolled vertically | Each track row isolates its clips' stacking, so the sticky ruler stays on top |
+| Export | An export stopped part-way (cancelled, or the audio side failed) could leave a decoded video frame unclosed ("A VideoFrame was garbage collected without being closed") | Both encoding sides finish before cleanup; the frame reader and renderer wait for in-flight decodes before closing (unit-tested) |
+| PDF import | pdf.js font warnings ("TT: undefined function") listed on Chrome's extension Errors page | pdf.js logs errors only |
+| Editor | Thin, hard-to-grab scrollbars | 14 px themed scrollbars, wider on hover |
 | Tests | PDF unit test timing out under parallel load; preview checks sampling before a PDF page was decoded; H.264 frames read before Chrome painted them after a seek | Realistic timeouts; tests wait for the decoded frame |
 
 ---
@@ -177,13 +181,15 @@ npm run test:e2e     # build, then the end-to-end suite in Chrome (CHROME_PATH=�
 2. Click **Load unpacked**, select `dist/`, and check there are no errors on the card.
 3. Pin ZoomCapture from the puzzle-piece menu; click it to record.
 
-**Package for the store:**
+**Package:**
 
-Zip the **contents** of `dist/` (`manifest.json` at the root of the zip), for example:
-- PowerShell: `Compress-Archive -Path dist\* -DestinationPath zoomcapture-1.0.0.zip`
-- macOS/Linux: `cd dist && zip -r ../zoomcapture-1.0.0.zip .`
+```bash
+npm run package                       # release/ZoomCapture-v1.0.0.zip (+ .sha256): for GitHub Releases, includes the Windows helper's installer
+node scripts/package.mjs --store      # release/ZoomCapture-v1.0.0-webstore.zip: the extension only, for the Chrome Web Store
+npm run package:verify                # extract the ZIP with the system tool, load it into Chrome, record a clip
+```
 
-The build has no source maps and no remote code.
+`manifest.json` is at the root of both ZIPs. The packaging script refuses source maps, sources, `.env` files and keys, and checks that the versions match. The build has no remote code. Releases on GitHub are made by the tag workflow (README → *Releasing a new version*).
 
 ---
 
@@ -192,7 +198,7 @@ The build has no source maps and no remote code.
 **Package**
 - [ ] `npm ci && npm run build && npm test && npm run test:e2e` pass on the release commit.
 - [ ] Version in `public/manifest.json` (1.0.0) is higher than any published version.
-- [ ] Zip of `dist/` contents; loaded once with **Load unpacked** in a clean profile; record, edit and export once by hand.
+- [ ] `node scripts/package.mjs --store` (the extension only); loaded once with **Load unpacked** in a clean profile; record, edit and export once by hand.
 - [ ] No source maps or test files in the zip; size about 35 MB (under the store's limit).
 
 **Listing**

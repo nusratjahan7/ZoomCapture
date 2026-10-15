@@ -52,6 +52,9 @@ async function openDocument(data: Uint8Array): Promise<OpenPdf> {
     iccUrl: `${ASSETS}iccs/`,
     // A broken font or object should not stop the other pages.
     stopAtErrors: false,
+    // Errors only. pdf.js warns about quirks it works around (e.g. "TT: undefined function" for a
+    // font's hinting code it skips), which Chrome lists on the extension's Errors page.
+    verbosity: lib.VerbosityLevel.ERRORS,
   });
   try {
     return { doc: await task.promise, task };
