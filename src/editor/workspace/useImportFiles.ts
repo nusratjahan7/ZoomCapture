@@ -8,6 +8,7 @@ import { getErrorMessage } from '@/utils/errors';
 import { describeStorageError, isQuotaError } from '@/utils/storageErrors';
 import { useEditor } from '../state/EditorContext';
 import { useTimelineActions } from './useTimelineActions';
+import { logDiagnostic } from '@/services/diagnostics';
 
 /** Whether a drag carries files from the computer. */
 export const hasFiles = (event: { dataTransfer: DataTransfer | null }) => Boolean(event.dataTransfer?.types.includes('Files'));
@@ -55,6 +56,7 @@ export function useImportFiles() {
           // A full disk gets the storage explanation; anything else (format, codec, size) its own message.
           const description = isQuotaError(error) ? describeStorageError(error) : getErrorMessage(error);
           toast.show({ variant: 'error', title: `Could not import “${file.name}”`, description });
+          logDiagnostic('import', error, 'warning');
         } finally {
           setImporting((count) => count - 1);
         }

@@ -41,6 +41,7 @@ import { ACTIVE_PHASES, useRecordingFlow, type FlowPhase } from './hooks/useReco
 import { useClickTracking } from './hooks/useClickTracking';
 import { useStudioCommands } from './hooks/useStudioCommands';
 import { useUserMediaStream } from './hooks/useUserMediaStream';
+import { logDiagnostic } from '@/services/diagnostics';
 
 const sessionId = getQueryParam('session');
 
@@ -78,7 +79,10 @@ export function RecordingPage() {
   const phaseRef = useRef<FlowPhase>('setup');
 
   const reportError = useCallback(
-    (title: string) => (error: unknown) => toast.show({ variant: 'error', title, description: getErrorMessage(error) }),
+    (title: string) => (error: unknown) => {
+      logDiagnostic(`studio:${title}`, error);
+      toast.show({ variant: 'error', title, description: getErrorMessage(error) });
+    },
     [toast],
   );
 

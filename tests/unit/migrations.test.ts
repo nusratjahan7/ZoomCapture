@@ -1,7 +1,7 @@
 import { openDB } from 'idb';
 import { describe, expect, it } from 'vitest';
 import { getAssetBlob, listRecordingAssets } from '@/services/storage/assetRepository';
-import { DB_NAME, DB_VERSION, getDb } from '@/services/storage/db';
+import { DB_NAME, DB_VERSION, EXPECTED_SCHEMA, getDb, SchemaError } from '@/services/storage/db';
 import { getProject } from '@/services/storage/projectRepository';
 import { listRecordings } from '@/services/storage/recordingRepository';
 
@@ -124,5 +124,71 @@ describe('IndexedDB migrations', () => {
 
     const untouched = (await (await getDb()).get('projects', 'prj_empty')) as unknown as { name: string };
     expect(untouched.name).toBe('Empty');
+  });
+
+  it('upgrades a v4 database (clips without types, no aspect ratio) and every index is in place', async () => {
+    // As Modules 03-05 (schema v4) left it.
+    const old = await openDB(DB_NAME, 4, {
+      upgrade(database) {
+        const projects = database.createObjectStore('projects', { keyPath: 'id' });
+        projects.createIndex('by-updated', 'updatedAt');
+        projects.createIndex('by-recording', 'recordingId');
+        const assets = database.createObjectStore('assets', { keyPath: 'id' });
+        assets.createIndex('by-project', 'projectId');
+        assets.createIndex('by-recording', 'recordingId');
+        database.createObjectStore('assetBlobs');
+        database.createObjectStore('recordingDrafts', { keyPath: 'id' });
+        database.createObjectStore('recordingChunks', { keyPath: ['draftId', 'trackId', 'seq'] });
+        database.createObjectStore('recordings', { keyPath: 'id' }).createIndex('by-created', 'createdAt');
+      },
+    });
+    await old.put('recordings', { id: 'rec_4', name: 'v4', projectId: 'prj_4', durationMs: 3000, sizeBytes: 3, mimeType: 'video/webm', screenAssetId: 'ast_4', assetIds: ['ast_4'], interactions: [], clickTracking: { mode: 'unsupported' }, createdAt: 5, updatedAt: 5 });
+    await old.put('projects', {
+      id: 'prj_4',
+      recordingId: 'rec_4',
+      schemaVersion: 2,
+      timeline: { durationMs: 3000, zoomMarkers: [], tracks: [{ id: 't', kind: 'video', name: 'Screen', clips: [{ id: 'b', assetId: 'ast_4', startMs: 1500, sourceInMs: 1500, sourceOutMs: 3000 }, { id: 'a', assetId: 'ast_4', startMs: 0, sourceInMs: 0, sourceOutMs: 1500 }] }] },
+      zoom: { mode: 'auto', defaultScale: 2, durationMs: 2500, transitionMs: 600, easing: 'ease-in-out' },
+      subtitles: [],
+      importedAssetIds: [],
+      exportSettings: { format: 'webm', resolution: 'source', frameRate: 30, quality: 'high', includeCamera: true, burnInSubtitles: false },
+      createdAt: 5,
+      updatedAt: 6,
+    });
+    old.close();
+
+    const db = await getDb();
+    expect(db.version).toBe(DB_VERSION);
+    for (const [store, indexes] of Object.entries(EXPECTED_SCHEMA)) {
+      expect([...db.transaction(store as never).objectStore(store as never).indexNames].sort()).toEqual([...indexes].sort());
+    }
+    const project = (await getProject('prj_4'))!;
+    expect(project).toMatchObject({ schemaVersion: 3, aspectRatio: 'source', exportSettings: { format: 'webm' } });
+    // Clips are typed and in time order.
+    expect(project.timeline.tracks[0]!.clips.map((clip) => [clip.id, clip.type])).toEqual([
+      ['a', 'media'],
+      ['b', 'media'],
+    ]);
+    expect((await listRecordings()).map((recording) => recording.id)).toEqual(['rec_4']);
+  });
+
+  it('refuses a damaged database with a clear error instead of failing later', async () => {
+    // Current version number, but an index missing (as after a hand edit or a browser fault).
+    const broken = await openDB(DB_NAME, DB_VERSION, {
+      upgrade(database) {
+        database.createObjectStore('projects', { keyPath: 'id' }).createIndex('by-updated', 'updatedAt');
+        const assets = database.createObjectStore('assets', { keyPath: 'id' });
+        assets.createIndex('by-project', 'projectId');
+        database.createObjectStore('assetBlobs');
+        database.createObjectStore('recordingDrafts', { keyPath: 'id' });
+        database.createObjectStore('recordingChunks', { keyPath: ['draftId', 'trackId', 'seq'] });
+        database.createObjectStore('recordings', { keyPath: 'id' }).createIndex('by-created', 'createdAt');
+      },
+    });
+    broken.close();
+    const error = await getDb().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(SchemaError);
+    expect((error as SchemaError).problems).toEqual(['index “projects.by-recording” missing', 'index “assets.by-recording” missing']);
+    expect((error as Error).message).toMatch(/recordings were not changed/);
   });
 });

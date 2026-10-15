@@ -46,6 +46,14 @@ export async function findRecordingIdByProject(projectId: string): Promise<strin
   return (await (await getDb()).get('projects', projectId))?.recordingId;
 }
 
+/** The recording exists but its editable project record doesn't (it can be rebuilt: libraryRepository). */
+export class MissingProjectError extends Error {
+  constructor(readonly recordingId: string) {
+    super('This recording’s project data is missing.');
+    this.name = 'MissingProjectError';
+  }
+}
+
 export interface RecordingDetails {
   recording: Recording;
   project: Project;
@@ -64,7 +72,7 @@ export async function getRecordingDetails(id: string): Promise<RecordingDetails 
     tx.objectStore('assets').index('by-recording').getAll(id),
     tx.objectStore('assets').index('by-project').getAll(recording.projectId),
   ]);
-  if (!project) throw new Error('This recording’s project data is missing.');
+  if (!project) throw new MissingProjectError(id);
   return { recording, project, assets: [...own, ...imported] };
 }
 

@@ -3,8 +3,48 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
-**Status: Module 09 (media export) is complete.** The edited project exports as a real **MP4** (H.264 + AAC, made with WebCodecs, not renamed WebM), **WebM**, an **animated GIF**, or a **PNG / JPEG** of any frame (also straight from the preview with **Save this frame**). Resolution, aspect ratio, frame rate, quality or bitrate, GIF size, frame rate, colours and part, image size and JPEG quality, the file name and where it is saved are chosen in one dialog, with a summary of the result before anything is rendered. Progress, cancelling, refusing a second export at the same time, and failures (unsupported codecs, too large for memory, encoder errors, a full disk) are handled and explained. Every format is drawn by the same renderer as the editor preview, and the tests check the files themselves: structure, codecs, length, zoom, subtitles and audio sync.
-Modules 01–08 (foundation, recording engine, recording library and storage, click tracking and automatic zoom, rendering engine, video editor, media importing, video enhancements) are still in place.
+**Status: version 1.0 — Module 10 (project library, settings, performance, reliability and final QA) is complete.**
+- **Dashboard:** recordings and their projects, with search, sorting, thumbnails, sizes, dates, duplicate and project rebuild.
+- **Settings:** export, aspect and camera-bubble defaults for new projects, live permission status, privacy information and a diagnostics log with names removed.
+- **Reliability:** error boundaries, a database schema check, low-storage and large-project warnings, measured rendering improvements, and a Content Security Policy that blocks every network destination except the optional speech-model download.
+
+Release notes, the QA results, known limitations and the Chrome Web Store checklist are in [docs/RELEASE.md](docs/RELEASE.md); the privacy policy is [PRIVACY.md](PRIVACY.md). Modules 01–09 (recording, library, click tracking and zoom, rendering, editor, media import, enhancements, export) are all in place.
+
+---
+
+## Install from GitHub Releases
+
+No build tools needed: each release has a ready-to-load ZIP.
+
+1. Open the [**Releases** page](https://github.com/nusratjahan7/ZoomCapture/releases/latest) and, under **Assets**, download **`ZoomCapture-vX.Y.Z.zip`** (not the "Source code" archives).
+2. Extract the ZIP to a folder you will **keep**, for example `Documents\ZoomCapture`. Chrome loads the extension from this folder every time it starts, so don't delete or move it. Don't leave it in Downloads if you clean that folder out.
+3. Open `chrome://extensions` (or `edge://extensions` in Microsoft Edge).
+4. Turn on **Developer mode** (top right).
+5. Click **Load unpacked** and choose the extracted folder: the one that **contains `manifest.json`**. If Chrome says the manifest is missing, you picked the folder above it.
+6. Click the puzzle-piece icon in the toolbar, pin **ZoomCapture**, then click its icon to start recording.
+
+Chrome 120 or newer is required. Camera, microphone and screen access are asked for by Chrome the first time you use them.
+
+**Check the download (optional):** each release also has `ZoomCapture-vX.Y.Z.zip.sha256`. Compare the value in it with `Get-FileHash ZoomCapture-vX.Y.Z.zip -Algorithm SHA256` (Windows PowerShell), `shasum -a 256 ZoomCapture-vX.Y.Z.zip` (macOS) or `sha256sum ZoomCapture-vX.Y.Z.zip` (Linux).
+
+**Windows controls helper (optional):** to keep the recording controls on screen but out of entire-screen recordings, turn on *On screen, but not in the video* in ZoomCapture's Settings. Settings shows a command to run in PowerShell **from the extracted ZoomCapture folder**; the installer it runs (`native\windows\install.ps1`) is included in the ZIP.
+
+### Updating to a newer version
+
+Chrome doesn't update extensions loaded this way, so updating is done by hand. Your recordings and settings are kept **as long as the extension is loaded from the same folder**: Chrome stores them under an extension ID that comes from the folder's location.
+
+1. Download the new `ZoomCapture-vX.Y.Z.zip` from [Releases](https://github.com/nusratjahan7/ZoomCapture/releases/latest).
+2. Close any open ZoomCapture tabs (studio, editor, settings). Don't update during a recording or an export.
+3. In your existing ZoomCapture folder, delete the old files, then extract the new ZIP **into the same folder**. Check `manifest.json` is directly inside it again.
+4. Open `chrome://extensions` and click the **Reload** arrow on ZoomCapture's card. The card shows the new version number.
+
+> **Don't click Remove to update.** Removing the extension deletes all its recordings and projects. Loading the new version from a *different* folder installs a second copy with a new ID and empty storage; your recordings stay with the old copy, so remove it only after downloading anything you want to keep.
+
+If the Windows controls helper is installed, run its install command from Settings again after updating, in case the helper changed.
+
+### Uninstalling
+
+Download any recordings or exports you want to keep. Then click **Remove** on ZoomCapture's card in `chrome://extensions`; Chrome deletes the extension's data. If you installed the Windows controls helper, also run `powershell -ExecutionPolicy Bypass -File native\windows\install.ps1 -Uninstall` from the ZoomCapture folder. Then delete the folder.
 
 ---
 
@@ -27,6 +67,40 @@ npm run test:e2e     # build, then drive the real extension in Chrome for Testin
 ```
 
 `npm run test:e2e` uses `CHROME_PATH` if set, otherwise the Chrome for Testing installed by `test:e2e:install`. The extension is loaded over the DevTools protocol, so an installed Chrome works too, e.g. `CHROME_PATH="C:/Program Files/Google/Chrome/Application/chrome.exe"` (useful where Windows blocks the downloaded Chrome for Testing). `node tests/e2e/screenshots.mjs` saves editor screenshots at several window sizes to `.cache/screenshots/`.
+
+## Releasing a new version
+
+Releases are built by GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)) when a version tag such as `v1.0.1` is pushed. Nothing is published unless you push a tag.
+
+**Version numbers:** `vMAJOR.MINOR.PATCH`. Bump PATCH for fixes (`v1.0.1`), MINOR for new features (`v1.1.0`) and MAJOR for big or incompatible changes (`v2.0.0`). Chrome accepts only numbers and dots in an extension's version, so pre-release tags like `v1.1.0-beta` are not used. The tag must equal the version in `package.json` and `public/manifest.json`, or the workflow stops.
+
+**Commands:**
+
+```bash
+npm run version:set -- 1.0.1   # sets the version in package.json, package-lock.json and public/manifest.json (no git commands)
+npm run package                # typecheck, build, then release/ZoomCapture-v1.0.1.zip + .sha256
+npm run package:verify         # extract that ZIP with the system's unzip tool, load it into Chrome, record a test clip
+```
+
+`npm run package` refuses a build with mismatched versions, missing files, source maps, sources, `.env` files or keys. It reads the ZIP back byte-for-byte, and it produces the same bytes for the same build. The ZIP contains `dist/` (with `manifest.json` at its root) and the two files of the optional Windows helper, under `native/windows/`. For the Chrome Web Store, `node scripts/package.mjs --store` makes `ZoomCapture-v1.0.1-webstore.zip` without the helper.
+
+**Steps for each release:**
+
+1. Update the code on `main` and check it: `npm test`, and `npm run test:e2e` when recording, editing or export changed.
+2. `npm run version:set -- 1.0.1`.
+3. Write the release notes: copy [docs/releases/TEMPLATE.md](docs/releases/TEMPLATE.md) to `docs/releases/v1.0.1.md` and fill it in. The workflow uses this file as the release text and fails without it.
+4. Optional: run `npm run package && npm run package:verify` locally, and load the extracted ZIP once with **Load unpacked** to try it by hand.
+5. Commit the version change and the notes, then push.
+6. Tag that commit and push the tag:
+   ```bash
+   git tag -a v1.0.1 -m "ZoomCapture v1.0.1"
+   git push origin v1.0.1
+   ```
+7. Watch the **Release** run in the repository's **Actions** tab. It runs the unit tests, builds, packages, installs the ZIP into Chrome and records a test clip. Then it creates the release **ZoomCapture v1.0.1**, with the notes and both files attached.
+
+To try the workflow without releasing, use **Actions → Release → Run workflow**: everything runs except the release, and the ZIP is available under the run's **Artifacts**. If a run fails after the tag is pushed, fix the problem, then move the tag: `git tag -d v1.0.1 && git push origin :refs/tags/v1.0.1`, then tag and push again. If the release already exists, a new run replaces its files.
+
+**Repository settings:** the workflow uses the built-in `GITHUB_TOKEN` (no secrets to add). If your organization restricts it, allow *Read and write permissions* under **Settings → Actions → General → Workflow permissions**.
 
 ## Load in Chrome
 
@@ -57,7 +131,7 @@ There are no install-time host permissions and no content scripts registered on 
 - Pages are opened and focused with `tabs.create/update/remove` and `runtime.getContexts`, which don't need the `tabs` permission.
 - Downloads go through a normal `<a download>` link, so the `downloads` permission isn't needed.
 - **Save to a file I choose** (exports) uses the File System Access save dialog (`showSaveFilePicker`), which asks you each time and gives access to that one file only. No permission is declared for it.
-- **Content Security Policy:** extension pages use `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'`. `'wasm-unsafe-eval'` is needed only to compile WebAssembly (the speech-recognition engine, ONNX Runtime, bundled under `dist/ort/`). It doesn't allow `eval` of JavaScript or loading scripts from anywhere else.
+- **Content Security Policy:** extension pages use `script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; connect-src 'self' blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co`. `'wasm-unsafe-eval'` is needed only to compile WebAssembly (the speech-recognition engine, ONNX Runtime, bundled under `dist/ort/`). It doesn't allow `eval` of JavaScript or loading scripts from anywhere else. `connect-src` limits network access to the extension itself and the speech-model hosts: no other address can be reached, even by mistake.
 - **Speech model download:** the first time you click **Generate subtitles**, the chosen Whisper model (about 40–80 MB) is downloaded from Hugging Face (`huggingface.co`) and kept in the browser's cache. This is a normal page request, so no host permission is needed. Your audio is never uploaded; recognition runs on this device. Nothing is downloaded unless you start it.
 - ZoomCapture never bypasses Chrome's permission prompts or sharing picker. Chrome shows its "sharing this screen" indicator for the whole recording.
 
@@ -200,7 +274,7 @@ Every write goes through `withTransaction()`, which aborts on any error, includi
 | `tests/unit/render.test.ts` | **Rendering calculations (Module 05):** camera transform and pixel crop at any resolution, edge clamping, the focus point always visible (2000 random cases), transitions never leaving the frame, inverse mapping; zoom timing (ease in, hold, ease out, intensity, transition length); **overlapping and nested effects without jumps**, independent of evaluation order; follow-cursor smoothing and the click fallback; pointer interpolation; letterboxed page → frame mapping; click emphasis, cursor highlight and annotation overlays; output size, encoder fallbacks and frame times; `drawFrame` crop and camera bubble against a mock canvas. |
 | `tests/unit/renderVideo.test.ts` | Rendering failures: unreadable file, **codec the browser can't decode** (named in the message); high-resolution fallback when the encoder rejects 4K; holding source frames for a constant frame rate with every decoded frame released, including on cancel. |
 | `tests/e2e/module04.mjs` | In real Chrome: no install-time host access; toolbar click on a demo page → *Record this tab* → on-page notice (hidden while recording) → real clicks normalized correctly, synthetic/right/duplicate clicks ignored, **timeline gap matches the real gap** → automatic markers saved → editor preview zooms at marker time; edit, duplicate, delete with undo, add, all kept after reload with the original clicks unchanged → same-site navigation re-attaches; another site pauses and a toolbar click resumes → screen recording shows the limitation and creates no automatic zoom. |
-| `tests/e2e/module05.mjs` | (Updated for the Module 06 editor.) In real Chrome, recording a demo page (coloured grid; beeps on every click, flashes on the first): pointer path recorded at the right place → canvas preview while seeking (a corner zoom stays inside the frame), playing at 2× and **scrubbing** the timeline → switch an effect to follow-cursor, **drag an effect** to a new time, turn on the cursor highlight → **Export video** → the rendered file matches the preview at six moments (before, zooming in, following the cursor, zooming out, a moved effect, holding at a corner): mean difference ≤ 1 of 255, while a 250 ms offset differs by 25–60 → **audio in sync**: the beep starts at the same time in the original and the rendered file, and the flash appears on the same frame. |
+| `tests/e2e/module05.mjs` | (Updated for the Module 06 editor.) In real Chrome, recording a demo page (coloured grid; beeps on every click, flashes on the first): pointer path recorded at the right place → canvas preview while seeking (a corner zoom stays inside the frame), playing at 2× and **scrubbing** the timeline → switch an effect to follow-cursor, **drag an effect** to a new time, turn on the cursor highlight → **Export video** → the rendered file matches the preview at six moments (before, zooming in, following the cursor, zooming out, a moved effect, holding at a corner): mean difference under 10 of 255 (2–7 with H.264 compression), while a 250 ms offset differs by 30–60 → **audio in sync**: the beep starts at the same time in the original and the rendered file, and the flash appears on the same frame. |
 | `tests/unit/timeline.test.ts` | **Timeline editing (Module 06):** moving (only the position changes, never overlapping, across compatible tracks, carrying zoom effects, locked tracks), **trimming** (start and source in-point together, limits: media length, neighbour, minimum, images), **splitting** (media and text, everything under the playhead, refusals), **deleting**, placing media and text, tracks (reorder, remove only empty), snapping, recorded clicks and pointer path mapped through cuts, layer composition, output sizes and letterboxing. |
 | `tests/unit/editorStore.test.ts` | **Undo/redo** (history, merging quick edits, every operation undone and redone back to the original), refused edits, **autosave** (debounced, status, failure keeps edits and retries, flush), **reopening an edited project** after closing the database (edits kept, original recording untouched, fresh history), importing and removing media files. |
 | `tests/unit/media.test.ts` | **Module 07:** file checks (type from contents, misnamed, empty, unknown, SVG, AVI, size limits), fingerprints, **multi-page PDFs** (page count and size, damaged files refused, pages placed one after another, new track when needed, bad pages refused, any length, page changes), **mixed media** (video, images and PDF pages composed as layers), **voiceover synchronization** (heard over a still page, placed exactly in the export across mixing windows), how **zoom effects follow their clips** (move, split, duplicate, delete, trim, retime, older projects), **cropping and moving pictures** (fitted by default, shape kept, kept in the frame, corner resize, edge crop without moving the rest, crop limits, drawn through the camera, stored only on video tracks, kept by splits), and storing an import once (a second import reuses it; original bytes kept). |
@@ -210,6 +284,9 @@ Every write goes through `withTransaction()`, which aborts on any error, includi
 | `tests/unit/export.test.ts` | **Module 09:** settings from older projects (defaults, repairs), bitrates per quality / codec / size / frame rate, GIF size, timing, range and limits, size estimates and the memory budget, safe file names; **pipeline choice** (MP4 via WebCodecs even where MediaRecorder can't write MP4, codec fallbacks, no audio encoder, clear refusals); plan problems (empty, unsupported, GIF too long, too large for memory but fine to a file); **one export at a time** (in the page and across tabs, released after failures); errors in words; chosen files kept only when complete; the in-memory limit. |
 | `tests/unit/gif.test.ts` | **GIF encoder**, checked with an independent decoder (`gifDecoder.ts`): a valid looping GIF89a whose frames decode to the input, only changed rectangles stored and unchanged frames merged into longer delays (total time kept), play-once, palette reduction with and without dithering, LZW with code-size growth and table resets over 70 000 pixels, output in bounded chunks. |
 | `tests/e2e/module09.mjs` | In real Chrome, a tab recording with a click (zoom, beep) and a subtitle → **summary** for each format, updated as settings change → **MP4**: `ftyp`/`moov`/`mdat` covering the whole file, H.264 + AAC, right length, last frame decodes, frames match the preview before and during the zoom, subtitle drawn as in the preview, **beep at the same time as in the recording**, downloaded byte for byte, object URL released → **WebM** (VP9 + Opus) → **GIF**: chosen part, size and frame rate, animated, loops, 2 s long, a zoomed frame matching the preview → **PNG and JPEG** from **Save this frame** at the playhead, matching the preview → **save to a chosen file**: written as it is made (media first, metadata last), plays; a cancelled export leaves the file empty → **duplicates**: a double click starts one export, another tab is refused while it runs, then can export → **failures**: no MP4 encoder (explained, Start disabled), an encoder error mid-export (explained, then a retry works). |
+| `tests/unit/library.test.ts` | **Module 10 dashboard data:** each recording with its project (edited or not, imported files, total size, last change), search (words, case, accents) and every sort, copy names, **duplicating** (all references remapped, own media, independent of the original after deletes and renames), **rebuilding** a missing project (recording untouched), orphaned media reported and removed only on request. |
+| `tests/unit/manifest.test.ts` | **Security review as tests:** exact permissions, nothing granted or injected at install, no shortcuts; CSP (local scripts only, network only to the speech-model hosts); no analytics or remote calls in the source; the click tracker injected only into the recorded tab and listening to the pointer only; diagnostic messages stripped of names, URLs, paths and e-mail addresses. |
+| `tests/e2e/module10.mjs` | In real Chrome: a **fresh install** (new profile) shows empty states, makes **no network requests** and starts nothing → **settings**: permission status read live (not stored); WebM / 720p / 9:16 and a rounded, large, top-left bubble become the next recording's project → **dashboard**: sort by name and date in both directions, search and its no-match state, card details, **duplicate** (own media, same edits), rename, edit and delete the copy (original intact) → **recovery**: a deleted project shows *Project missing*, the editor explains, **Rebuild project** restores it → **low storage** warnings in dashboard and editor → **damaged data**: the error page appears, the error is in Settings' diagnostics without the recording's name, and Rebuild repairs it → **QA**: Window mode asks Chrome for a window, a WebM **video file imports**, goes on the timeline and plays. |
 | `tests/e2e/module06.mjs` | In real Chrome on a recording: editor layout → split at the playhead (`S`) → select and delete → undo/redo (keys and toolbar) → **move** and **trim** by dragging → keyboard nudge → add text and change the aspect ratio → autosave → **reload** shows every edit → leaving with unsaved changes asks first → export renders the edited length, square for 1:1. |
 | `tests/e2e/run.mjs` | In real Chrome: record, then save with progress and a thumbnail → rename (including validation) → **close and reopen the browser** → library still shows everything → preview (object URL revoked) → download (`E2E demo.webm`) → delete (cancel, then confirm; every row removed) → disk full: error, nothing lost, Retry saving → disk full, quit, reopen, Recover from the library. |
 
@@ -282,6 +359,83 @@ Project.timeline.zoomMarkers = generateZoomMarkers(clicks, project.zoom)   (edit
 ### Editing
 
 Zoom effects are edited in the video editor (see [Video editor](#video-editor-module-06)): on the timeline's *Zoom* lane, in the *Zoom* panel, and in the *Edit* (properties) panel.
+
+## Library, settings and reliability (Module 10)
+
+### Project dashboard (`editor/index.html`)
+
+- **Every recording with its editable project** (`storage/libraryRepository.ts`, read in one transaction, metadata only):
+  - thumbnail and duration;
+  - when it was recorded, and when it was last edited ("Not edited yet" / "Edited 5 minutes ago");
+  - its size: the recording plus files imported into the project;
+  - the number of imported files.
+- **Search** by name: every word must match, ignoring case and accents. **Sort** by last modified, date recorded, name, duration or size, ascending or descending. The sort is remembered in this browser.
+- **Actions:** Edit, Preview, Rename, **Duplicate**, Download original, Delete (with confirmation).
+  - **Duplicating** copies the recording, its edits and its imported files into an independent project ("Name (copy)"), so deleting either never affects the other. It checks for enough free space first.
+- **States:** loading, empty, no search results, load error (with Try again).
+- **Recovery:**
+  - Unfinished recordings are recovered as before (Module 03).
+  - A recording whose **project record is missing** shows **Rebuild project**, in the dashboard and when opened. This rebuilds the timeline from the recording's own media and clicks, as when it was saved. The recording itself is never changed.
+- **Warnings:**
+  - **Storage almost full** (under 1 GB left) shows in the dashboard, the editor (dismissible) and Settings.
+  - **Large projects** (over 2 GB or 30 minutes) are flagged with advice to save exports to a file.
+
+### Settings
+
+- **Capture:** default source, resolution, frame rate, tab/system audio, countdown, floating controls (as before).
+- **Camera & microphone:** default on/off and devices. Live **permission status** is read from Chrome (`navigator.permissions`), re-checked when the page is shown again and when it changes, and never stored: only Chrome can grant or revoke it, and Settings says where to change it. Device lists are re-read when devices change and when the page is shown. A warning appears when no device is connected.
+- **Automatic zoom:** on/off, click tracking, default zoom level, duration and transition speed.
+- **New projects:** export format (MP4/WebM), export resolution and aspect ratio, copied into each new recording's project (`RecordingDraft.projectDefaults`, applied by `buildProject`).
+- **Camera bubble:** position (corner), size, shape (circle or rounded rectangle), border and shadow, with a small preview. They apply to new recordings; each project can still restyle its bubble.
+- **Storage:** recordings, unfinished recordings, space used and left, persistence. **Files no recording or project uses** (left by an interrupted operation) are reported, and removed only when you confirm.
+- **Privacy & data:** what is stored, where, and the one network use (the speech model).
+- **Diagnostics:** recent errors, a **Copy report** button (versions, storage, schema, counts, encoder data and sanitized errors) and Clear.
+
+### Reliability
+
+- **Error boundaries:**
+  - Every page is wrapped: a crash shows what happened, that recordings are safe, and offers Reload and Copy diagnostic report, instead of a blank page.
+  - Each editor side panel has its own boundary, so a failing panel doesn't take down the editor.
+  - Damaged project data opens the error page (tested), and **Rebuild project** repairs it.
+- **Diagnostic logging** (`services/diagnostics.ts`):
+  - Uncaught errors, rejected promises, render errors, and failed saves, imports, exports, transcriptions and recordings go to the console and a 50-entry local log.
+  - Messages are sanitized first: quoted names, URLs, file paths and e-mail addresses are removed. Media, subtitles, names and device ids are never logged, and nothing is sent anywhere.
+- **Database:**
+  - Each time it opens, its structure is checked against the schema (`schemaProblems`). A damaged or partly migrated database gives a clear error instead of failing later.
+  - Migrations are tested from v2 and v4 to the current v5, and against a database with missing indexes.
+- **Interrupted operations:**
+  - Recordings and saves resume (Module 03).
+  - Exports to a chosen file are discarded if not completed (Module 09).
+  - Edits are saved on page hide and before unload.
+  - Leaving during an export asks first.
+  - **Esc during an export** now cancels it, instead of closing the dialog while it kept running.
+- **Resources:** media streams, decoders, object URLs and canvases are released when no longer used (Modules 02–09). Closed dialogs no longer keep their contents mounted.
+
+### Performance (measured)
+
+React commits were counted in real Chrome with a React DevTools hook, on an unminified production build:
+- **Idle and playback:** idle editor, 0 commits; 3 s of playback, 2 commits (play and pause), because the playhead and timecode are drawn without React.
+- **Dragging a clip, 20 steps, before → after:**
+  - icon-button renders 182 → 27;
+  - track-header renders 63 → 0;
+  - the closed export dialog's form (fields, summary rows, selectors) re-rendered on every edit → not at all.
+
+The changes:
+- dialogs render their contents only while open, and the export dialog mounts only when opened;
+- the editor layout and toolbar subscribe to the single values they use (timeline height, aspect ratio) instead of the whole project;
+- track headers are memoized.
+
+The canvas preview already redraws only when the time or the project changes (`TimelinePlayer` dirty flag).
+
+### Security and privacy review
+
+- **Manifest V3 permissions** (`tests/unit/manifest.test.ts` locks them in):
+  - `storage`, `unlimitedStorage`, `activeTab`, `scripting`, `tabCapture`;
+  - optional `nativeMessaging` and optional site access;
+  - no install-time host permissions, no registered content scripts, no web-accessible resources, no external connections, no keyboard shortcut that could start a recording.
+- **Content script scope:** the click tracker is injected only by the studio, only into the tab being recorded (`chrome.scripting.executeScript` on that tab id). It listens only to pointer events and page hide: never keys, input, the clipboard or page text (tested).
+- **No accidental recording:** a session starts only from a click (popup, dashboard or studio). Capturing needs the studio's Start button after Chrome's own sharing picker, and Chrome's sharing indicator shows throughout. A fresh install records nothing and makes no network requests (tested).
+- **Local by default:** recordings, projects and settings stay in this profile. No analytics, tracking or remote code (tested by scanning the source). The only external service is the optional speech model download from Hugging Face (see [Permissions](#permissions) and [PRIVACY.md](PRIVACY.md)).
 
 ## Media export (Module 09)
 
@@ -565,15 +719,23 @@ ZoomCapture/
 ├── tests/
 │   ├── unit/                   # Vitest: recordingStorage, migrations, webmDuration, storageErrors,
 │   │                           # zoomCoordinates, clickTracking, zoomMarkers, render, renderVideo,
-│   │                           # timeline, editorStore, media, enhancements, export, gif (+ gifDecoder)
-│   ├── e2e/{run,lib,module04,…,module09,screenshots}.mjs   # Puppeteer + Chrome against dist/
+│   │                           # timeline, editorStore, media, enhancements, export, gif (+ gifDecoder),
+│   │                           # library, manifest (security review)
+│   ├── e2e/{run,lib,module04,…,module10,screenshots}.mjs   # Puppeteer + Chrome against dist/
 │   ├── fixtures/makePdf.mjs                           # test PDFs (coloured, numbered pages) and WAV tones
 │   └── native/{run,extension}.mjs, probe.ps1           # Windows controls helper on the real desktop
+├── PRIVACY.md                  # privacy policy (Chrome Web Store)
+├── docs/RELEASE.md             # 1.0 QA report: feature checklist, results, limitations, store checklist
 ├── public/                     # copied verbatim into dist/
 │   ├── manifest.json           # Manifest V3
 │   └── icons/icon-{16,32,48,128}.png
 ├── native/windows/             # optional controls helper: ZoomCaptureControls.cs, install.ps1
 ├── scripts/generate-icons.mjs  # dependency-free PNG icon generator
+├── scripts/package.mjs         # `npm run package`: release ZIP + checksum, with checks
+├── scripts/verify-package.mjs  # `npm run package:verify`: extract, load in Chrome, record a clip
+├── scripts/set-version.mjs     # `npm run version:set`: version in package.json, lock file, manifest
+├── .github/workflows/release.yml   # tag v*.*.* → build, test, package, GitHub Release
+├── docs/releases/              # release notes per version (vX.Y.Z.md) and TEMPLATE.md
 ├── scripts/dev.mjs             # `npm run dev`: watches pages and the content script
 └── src/
     ├── content/clickTracker.ts # click tracker, injected on demand (built as one IIFE file)
@@ -600,7 +762,7 @@ ZoomCapture/
     │                  FramingOverlay,CameraHandle,ClipFrameOverlay,fields}.tsx, useTimelineActions,
     │                  useEditorShortcuts, useAssetUrls
     │                  panels/{Background,Camera,Audio,Captions,Overlays}Panel.tsx, common.tsx
-    ├── settings/{SettingsPage,AutoZoomSettingsPanel}.tsx   # options page
+    ├── settings/{SettingsPage,AutoZoomSettingsPanel,MorePanels,NativeControlsSetting}.tsx   # options page
     ├── shared/
     │   ├── components/         # Button, IconButton, Toggle, Tooltip, Dialog/ConfirmDialog,
     │   │                       # Toast, SegmentedControl, Select, Panel, EmptyState, StatusBadge, Logo,
@@ -611,7 +773,7 @@ ZoomCapture/
     │   ├── captureSources.ts
     │   └── mountPage.tsx       # root render + providers
     ├── services/
-    │   ├── messaging.ts, settings.ts, sessionState.ts, navigation.ts
+    │   ├── messaging.ts, settings.ts, sessionState.ts, navigation.ts, diagnostics.ts (sanitized error log)
     │   ├── media/{displayCapture,tabCapture,userMedia,audioLevel,thumbnail,probe}.ts
     │   ├── zoom/               # coordinates, clicks (filter + dedupe, pointer batches), support (per source), markers
     │   ├── render/             # camera, paths (pointer, smoothing), frameState, draw, output, compose,
@@ -626,7 +788,7 @@ ZoomCapture/
     │   │                       # exportMedia (workflow, GIF and stills, one job at a time, errors),
     │   │                       # gif (GIF89a encoder), saveTarget (chosen file / memory), download,
     │   │                       # exporters (the original recording as it is)
-    │   └── storage/            # db (schema), migrations, recordingRepository, projectRepository,
+    │   └── storage/            # db (schema + check), migrations, recordingRepository, projectRepository, libraryRepository,
     │                           # projectDefaults, assetRepository, recordingDraftRepository,
     │                           # libraryEvents, storageStatus
     ├── types/                  # session, recording (+ drafts), project, zoom, settings, messages
@@ -933,3 +1095,21 @@ Automated: `npm test` (226 unit tests) and `npm run test:e2e` (50 end-to-end tes
 - [ ] Choose **A file I choose**, pick a folder and export a long video: memory use (Task Manager) stays flat while the file grows. Cancel another one half-way: no broken file is left.
 - [ ] Click **Start export** twice quickly: one export runs. Start one in a second editor tab meanwhile: it says another export is running.
 - [ ] Press Esc (or **Cancel export**) during an export: it stops and says nothing was saved; the editor stays responsive throughout.
+
+## Module 10 test checklist
+
+Automated: `npm test` (240 unit tests) and `npm run test:e2e` (57 end-to-end tests). The full QA matrix and results are in [docs/RELEASE.md](docs/RELEASE.md). Manual checks:
+
+**Dashboard**
+- [ ] Make three recordings with different names. Search by part of a name; sort by each column both ways; reload: the sort is remembered.
+- [ ] Duplicate one, edit the copy (cut, text), and check the original is unchanged. Delete the original: the copy still plays and exports.
+- [ ] Check each card's size includes imported files, and "Edited …" changes after an edit.
+
+**Settings**
+- [ ] Set WebM, 720p, 9:16 and a top-left rounded bubble; record: the new project uses them. Restore defaults.
+- [ ] Block the camera in Chrome's site settings: Settings shows *Blocked* when you return, with where to change it.
+
+**Reliability**
+- [ ] Open Settings → Diagnostics → **Copy report** and paste it: no recording names or addresses.
+- [ ] Fill the disk until under 1 GB is left: the dashboard and editor warn.
+- [ ] Close the editor tab mid-edit and reopen: edits are there. Close the studio mid-recording: the dashboard offers to recover it.

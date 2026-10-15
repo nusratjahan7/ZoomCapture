@@ -157,6 +157,30 @@ describe('frame cursor: source frames for each output time', () => {
     expect(open()).toBe(0);
   });
 
+  it('closing while a frame is still decoding waits for it and leaves no frame unclosed', async () => {
+    // An export stopped mid-frame (cancelled, or the audio side failed) closes the renderer while
+    // the decoder is still producing the next frame.
+    const { frames, open } = source([0, 1, 2, 3]);
+    const slow = () => {
+      const iterator = frames();
+      return {
+        next: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return iterator.next();
+        },
+        return: (value?: unknown) => iterator.return(value as never),
+      };
+    };
+    const cursor = new FrameCursor(slow);
+    const pending = cursor.frameAt(2.5);
+    const closing = cursor.close();
+    const frame = await pending;
+    expect(frame?.timestamp).toBe(2);
+    frame?.close();
+    await closing;
+    expect(open()).toBe(0);
+  });
+
   it('yields nothing without frames', async () => {
     const cursor = new FrameCursor(source([]).frames);
     expect(await cursor.frameAt(1)).toBeNull();

@@ -1,4 +1,4 @@
-import type { CameraLayout } from './project';
+import type { AspectRatio, CameraLayout, ExportResolution } from './project';
 import type { CaptureSource } from './session';
 import type { AutoZoomSettings } from './zoom';
 
@@ -34,6 +34,8 @@ export interface UserSettings {
   /** Last camera bubble placement; copied into each new project. */
   cameraBubble: CameraLayout;
   autoZoom: AutoZoomSettings;
+  /** Export size, shape and format given to each new project (changeable per project). */
+  projectDefaults: { exportResolution: ExportResolution; aspectRatio: AspectRatio; exportFormat: 'mp4' | 'webm' };
 }
 
 export const DEFAULT_SETTINGS: UserSettings = {
@@ -51,4 +53,5 @@ export const DEFAULT_SETTINGS: UserSettings = {
   nativeControls: false,
   cameraBubble: { x: 0.86, y: 0.78, size: 'medium' },
   autoZoom: { enabled: true, trackClicks: true, scale: 2, durationMs: 2500, transitionSpeed: 'normal' },
+  projectDefaults: { exportResolution: 'source', aspectRatio: 'source', exportFormat: 'mp4' },
 };

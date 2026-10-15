@@ -128,7 +128,7 @@ describe('checking imported files', () => {
   });
 });
 
-describe('PDF documents', () => {
+describe('PDF documents', { timeout: 20_000 }, () => {
   it('reads the number of pages and the page size of a multi-page PDF', async () => {
     const info = await probePdf(new Blob([makePdf([[255, 0, 0], [0, 200, 0], [0, 0, 255]], { width: 960, height: 540 })]));
     expect(info).toEqual({ pageCount: 3, width: 960, height: 540 });

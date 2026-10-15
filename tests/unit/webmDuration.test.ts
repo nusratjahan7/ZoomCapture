@@ -54,7 +54,9 @@ describe('setWebmDuration', () => {
     const original = new Blob([chromeWebm(), media], { type: 'video/webm' });
     const patched = await setWebmDuration(original, 1000);
     const end = new Uint8Array(await patched.slice(patched.size - media.length).arrayBuffer());
-    expect(end).toEqual(media);
+    // Compared as bytes: a deep equality over 600 KB element by element takes seconds on a busy machine.
+    expect(end.length).toBe(media.length);
+    expect(Buffer.compare(end, media)).toBe(0);
   });
 
   it('updates an existing Duration in place', async () => {

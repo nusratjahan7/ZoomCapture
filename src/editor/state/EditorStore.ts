@@ -2,6 +2,7 @@ import { createHistory, pushHistory, redo, undo, type History } from '@/services
 import { TimelineEditError } from '@/services/timeline/operations';
 import type { ProjectEdits } from '@/services/storage/projectRepository';
 import type { Project } from '@/types';
+import { logDiagnostic } from '@/services/diagnostics';
 
 export type SaveStatus = { state: 'saved' } | { state: 'pending' } | { state: 'saving' } | { state: 'error'; message: string };
 
@@ -184,6 +185,7 @@ export class EditorStore {
       },
       (error: unknown) => {
         this.saveStatus = { state: 'error', message: error instanceof Error ? error.message : String(error) };
+        logDiagnostic('editor-save', error);
       },
     );
     try {

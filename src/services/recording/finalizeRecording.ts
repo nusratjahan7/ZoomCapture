@@ -4,6 +4,8 @@ import { dedupeInteractions } from '@/services/zoom/clicks';
 import { generateZoomMarkers } from '@/services/zoom/markers';
 import { getDraft, readTrackBlob, saveDraft, trackChunkRange } from '@/services/storage/recordingDraftRepository';
 import type {
+  AutoZoomSettings,
+  CameraLayout,
   DraftTrack,
   MediaAsset,
   Project,
@@ -147,18 +149,13 @@ async function commitRecording(draft: RecordingDraft): Promise<FinalizeResult> {
       createdAt: draft.createdAt,
       updatedAt: now,
     };
-    const project = newProject(draft.projectId!, recording.id, now);
-    if (draft.autoZoom) project.zoom = zoomSettingsFrom(draft.autoZoom, recording.clickTracking.mode !== 'unsupported');
-    // Zoom markers live in the editable project, generated from (but independent of) the clicks.
-    const tracks = buildTimeline(assets);
-    // Effects made from clicks zoom into the screen recording: they belong to its clip.
-    const screenClipId = tracks.find((track) => track.kind === 'video')?.clips[0]?.id;
-    const zoomMarkers =
-      project.zoom.mode === 'auto'
-        ? generateZoomMarkers(recording.interactions, project.zoom, recording.durationMs, now).map((marker) => ({ ...marker, clipId: screenClipId }))
-        : [];
-    project.timeline = { durationMs: recording.durationMs, tracks, zoomMarkers };
-    project.cameraLayout = assets.some((asset) => asset.kind === 'camera') ? draft.cameraLayout : undefined;
+    const project = buildProject(recording, assets, {
+      projectId: draft.projectId!,
+      now,
+      autoZoom: draft.autoZoom,
+      cameraLayout: draft.cameraLayout,
+      defaults: draft.projectDefaults,
+    });
 
     // `add` (not `put`): an id collision fails loudly instead of overwriting another recording.
     await tx.objectStore('recordings').add(recording);
@@ -166,6 +163,42 @@ async function commitRecording(draft: RecordingDraft): Promise<FinalizeResult> {
     await tx.objectStore('recordingDrafts').delete(draft.id);
     return { recording, project };
   });
+}
+
+export interface ProjectSetup {
+  projectId: string;
+  now: number;
+  /** Automatic zoom preferences at recording time (zoom effects are made from the clicks). */
+  autoZoom?: AutoZoomSettings;
+  /** Camera bubble placement and style (used when there is a camera track). */
+  cameraLayout?: CameraLayout;
+  /** The user's default export size and shape for new projects. */
+  defaults?: RecordingDraft['projectDefaults'];
+}
+
+/**
+ * The editable project for a recording: one timeline track per recorded track, zoom effects from
+ * the clicks, the camera bubble, and the default export settings. Used when a recording is saved,
+ * and to rebuild a project whose record is missing (see libraryRepository).
+ */
+export function buildProject(recording: Recording, assets: readonly MediaAsset[], setup: ProjectSetup): Project {
+  const project = newProject(setup.projectId, recording.id, setup.now);
+  if (setup.autoZoom) project.zoom = zoomSettingsFrom(setup.autoZoom, recording.clickTracking.mode !== 'unsupported');
+  // Zoom markers live in the editable project, generated from (but independent of) the clicks.
+  const tracks = buildTimeline([...assets]);
+  // Effects made from clicks zoom into the screen recording: they belong to its clip.
+  const screenClipId = tracks.find((track) => track.kind === 'video')?.clips[0]?.id;
+  const zoomMarkers =
+    project.zoom.mode === 'auto'
+      ? generateZoomMarkers(recording.interactions, project.zoom, recording.durationMs, setup.now).map((marker) => ({ ...marker, clipId: screenClipId }))
+      : [];
+  project.timeline = { durationMs: recording.durationMs, tracks, zoomMarkers };
+  project.cameraLayout = assets.some((asset) => asset.kind === 'camera') ? setup.cameraLayout : undefined;
+  if (setup.defaults) {
+    project.aspectRatio = setup.defaults.aspectRatio;
+    project.exportSettings = { ...project.exportSettings, resolution: setup.defaults.exportResolution, format: setup.defaults.exportFormat };
+  }
+  return project;
 }
 
 /** A previous call (or another extension context) already saved this draft. */

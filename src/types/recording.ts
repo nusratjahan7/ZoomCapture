@@ -1,4 +1,4 @@
-import type { CameraLayout, CaptureSourceInfo } from './project';
+import type { AspectRatio, CameraLayout, CaptureSourceInfo, ExportResolution } from './project';
 import type { RecordingTrackKind } from './session';
 import type { AutoZoomSettings, ClickTrackingInfo, CursorSample, InteractionEvent } from './zoom';
 
@@ -56,6 +56,8 @@ export interface RecordingDraft {
   clickTracking?: ClickTrackingInfo;
   /** Automatic-zoom preferences at recording time, applied when the recording is saved. */
   autoZoom?: AutoZoomSettings;
+  /** Default export size and shape for the new project (from Settings at recording time). */
+  projectDefaults?: { exportResolution: ExportResolution; aspectRatio: AspectRatio; exportFormat: 'mp4' | 'webm' };
   /** Reserved when saving starts, so a resumed save produces the same ids. */
   recordingId?: string;
   projectId?: string;

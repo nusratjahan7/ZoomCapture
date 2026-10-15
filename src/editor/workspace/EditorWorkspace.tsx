@@ -8,6 +8,8 @@ import type { RecordingDetails } from '@/services/storage/recordingRepository';
 import type { AssetLookup } from '@/services/timeline/operations';
 import { Button, Dialog, IconButton, LogoMark, useToast } from '@/shared/components';
 import { useRecordingActions } from '@/shared/hooks/useRecordingActions';
+import { useStorageStatus } from '@/shared/hooks/useStorageStatus';
+import { formatBytes } from '@/utils/format';
 import type { AspectRatio, MediaAsset } from '@/types';
 import { createId } from '@/utils/id';
 import { ExportDialog } from '../components/ExportDialog';
@@ -171,6 +173,7 @@ export function EditorWorkspace({ details }: { details: RecordingDetails }) {
             </Button>
           </div>
         )}
+        <LowStorageBanner />
         <EditorLayout urls={urls} />
       </div>
       <ProjectExportDialog mode={exportMode} onClose={() => setExportMode(null)} />
@@ -226,10 +229,11 @@ function EditorLayout({ urls }: { urls: ReturnType<typeof useAssetUrls> }) {
 
   // Timeline height: dragged with the handle above it, kept within the window.
   const [timelineHeight, setTimelineHeight] = useState(() => readStoredHeight() ?? Math.round(window.innerHeight * 0.32));
-  const timeline = useEditorState((snapshot) => snapshot.project.timeline);
-  // Never taller than its tracks: spare height goes to the preview.
-  const hasCaptions = useEditorState((snapshot) => snapshot.project.subtitles.some((track) => track.cues.length > 0));
-  const contentHeight = timelineContentHeight(timeline, hasCaptions);
+  // Never taller than its tracks: spare height goes to the preview. Selected as a number, so the
+  // whole layout doesn't re-render on every edit (only when the tracks' height changes).
+  const contentHeight = useEditorState((snapshot) =>
+    timelineContentHeight(snapshot.project.timeline, snapshot.project.subtitles.some((track) => track.cues.length > 0)),
+  );
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
   useEffect(() => {
     const onResize = () => setViewportHeight(window.innerHeight);
@@ -367,7 +371,7 @@ function Toolbar() {
   const canRedo = useEditorState((snapshot) => snapshot.canRedo);
   const undoLabel = useEditorState((snapshot) => snapshot.undoLabel);
   const redoLabel = useEditorState((snapshot) => snapshot.redoLabel);
-  const project = useEditorState((snapshot) => snapshot.project);
+  const aspectRatio = useEditorState((snapshot) => snapshot.project.aspectRatio);
   const actions = useTimelineActions();
   const recordingActions = useRecordingActions({ onDeleted: () => window.location.replace('index.html') });
   const [downloading, setDownloading] = useState(false);
@@ -409,7 +413,7 @@ function Toolbar() {
             <span className="hidden xl:inline">Aspect ratio</span>
             <span className="sr-only xl:hidden">Aspect ratio</span>
             <select
-              value={project.aspectRatio}
+              value={aspectRatio}
               onChange={(event) => {
                 const aspectRatio = event.target.value as AspectRatio;
                 // Custom starts from the recording's own size (edited in the Canvas panel).
@@ -475,18 +479,33 @@ function Toolbar() {
 function ProjectExportDialog({ mode, onClose }: { mode: 'video' | 'still' | null; onClose: () => void }) {
   const { store, recording, assets } = useEditor();
   const project = useEditorState((snapshot) => snapshot.project);
-  // Keeps the last mode while closing, so the dialog doesn't change under its closing animation.
-  const lastMode = useRef<'video' | 'still'>('video');
-  if (mode) lastMode.current = mode;
+  // Mounted only while open: it doesn't recompute its summary on every edit (encoder checks are cached).
+  if (!mode) return null;
   return (
     <ExportDialog
-      open={mode !== null}
-      mode={lastMode.current}
+      open
+      mode={mode}
       onClose={onClose}
       recording={recording}
       project={project}
       assets={assets}
       onSettingsChange={(exportSettings) => store.setSettings((p) => ({ ...p, exportSettings }))}
     />
+  );
+}
+
+/** Warns (once per visit, dismissible) when the browser is running out of space for edits and imports. */
+function LowStorageBanner() {
+  const { low, free } = useStorageStatus();
+  const [dismissed, setDismissed] = useState(false);
+  if (!low || dismissed) return null;
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning" data-testid="low-storage">
+      <AlertTriangle size={16} aria-hidden />
+      Storage is almost full ({formatBytes(free ?? 0)} left). Saving edits, importing files and exporting may fail.
+      <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setDismissed(true)}>
+        Dismiss
+      </Button>
+    </div>
   );
 }

@@ -4,7 +4,13 @@ const SETTINGS_KEY = 'settings';
 
 function withDefaults(stored: Partial<UserSettings> | undefined): UserSettings {
   // Nested groups merge key by key, so settings added in an update get their defaults.
-  return { ...DEFAULT_SETTINGS, ...stored, autoZoom: { ...DEFAULT_SETTINGS.autoZoom, ...stored?.autoZoom } };
+  return {
+    ...DEFAULT_SETTINGS,
+    ...stored,
+    autoZoom: { ...DEFAULT_SETTINGS.autoZoom, ...stored?.autoZoom },
+    projectDefaults: { ...DEFAULT_SETTINGS.projectDefaults, ...stored?.projectDefaults },
+    cameraBubble: { ...DEFAULT_SETTINGS.cameraBubble, ...stored?.cameraBubble },
+  };
 }
 
 export async function getSettings(): Promise<UserSettings> {

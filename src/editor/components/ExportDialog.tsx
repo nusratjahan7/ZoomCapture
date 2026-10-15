@@ -32,6 +32,7 @@ import { Button, Dialog, ProgressBar, SegmentedControl, Select, TextField, Toggl
 import type { AspectRatio, ExportFormat, ExportSettings, GifExportSettings, MediaAsset, Project, Recording } from '@/types';
 import { formatBytes, formatDuration } from '@/utils/format';
 import { formatTimecode, parseTimecode, useEditor } from '../state/EditorContext';
+import { logDiagnostic } from '@/services/diagnostics';
 
 type Phase =
   | { name: 'setup' }
@@ -240,6 +241,7 @@ export function ExportDialog({
       setPhase({ name: 'done', outcome, url });
     } catch (error) {
       const failure = describeExportError(controller.signal.aborted ? new DOMException('Cancelled', 'AbortError') : error);
+      if (failure.kind !== 'cancelled' && failure.kind !== 'busy') logDiagnostic(`export:${settings.format}:${failure.kind}`, error);
       // Closing the dialog cancels quietly; the Cancel button shows that nothing was saved.
       if (abortRef.current === controller || failure.kind !== 'cancelled') setPhase({ name: 'failed', failure });
     } finally {

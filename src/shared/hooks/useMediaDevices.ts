@@ -9,8 +9,15 @@ export function useMediaDevices() {
 
   useEffect(() => {
     void refresh();
+    // Rechecked when devices change and when the page is shown again (permissions may have
+    // changed in Chrome meanwhile): availability is never assumed from an earlier check.
+    const onVisible = () => document.visibilityState === 'visible' && void refresh();
     navigator.mediaDevices.addEventListener('devicechange', refresh);
-    return () => navigator.mediaDevices.removeEventListener('devicechange', refresh);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', refresh);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [refresh]);
 
   const requestAccess = useCallback(async () => {

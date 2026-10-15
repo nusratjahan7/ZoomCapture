@@ -70,6 +70,35 @@
   ::selection {
     background: var(--color-accent-soft);
   }
+
+  /* Scrollbars: a 14px track without arrow buttons and a rounded thumb that widens on hover.
+     The transparent border insets the thumb from the track edges. (Chrome ignores these
+     pseudo-elements on elements that set `scrollbar-width` or `scrollbar-color`.) */
+  ::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+  }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: var(--color-line-strong);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    border-width: 2px;
+    background-color: #4a5170;
+  }
+  ::-webkit-scrollbar-thumb:active {
+    border-width: 2px;
+    background-color: var(--color-accent);
+  }
+  ::-webkit-scrollbar-button {
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
