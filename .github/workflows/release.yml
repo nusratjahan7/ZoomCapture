@@ -3,7 +3,7 @@
 # - Pushing a tag like v1.0.1 (matching the version in package.json and the manifest) runs the unit
 #   tests, builds, packages, installs the ZIP into Chrome as Load unpacked would, records a test
 #   clip, then creates the release "ZoomCapture v1.0.1" with docs/releases/v1.0.1.md as its notes
-#   and the ZIP and its checksum attached.
+#   and the ZIP, its checksum and a copy named ZoomCapture.zip (for the README's link) attached.
 # - "Run workflow" (Actions tab) does everything except the release: the ZIP is kept as the run's
 #   artifact, to try before tagging.
 #
@@ -96,7 +96,9 @@ jobs:
 
       - name: Create the release (or update its files if it exists)
         run: |
-          files=("release/ZoomCapture-$TAG.zip" "release/ZoomCapture-$TAG.zip.sha256")
+          # ZoomCapture.zip is the same file under a fixed name: README's download button links to
+          # …/releases/latest/download/ZoomCapture.zip, which then always gives the newest version.
+          files=("release/ZoomCapture-$TAG.zip" "release/ZoomCapture-$TAG.zip.sha256" "release/ZoomCapture.zip")
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" "${files[@]}" --clobber
           else

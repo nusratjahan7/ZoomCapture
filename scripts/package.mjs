@@ -1,6 +1,8 @@
 // Packages the production build (dist/) as the ZIP attached to GitHub Releases:
 //   release/ZoomCapture-v<version>.zip         manifest.json at the root, ready for Load unpacked
 //   release/ZoomCapture-v<version>.zip.sha256  checksum, in `sha256sum` format
+//   release/ZoomCapture.zip                    the same ZIP under a fixed name, so the README's link
+//                                              …/releases/latest/download/ZoomCapture.zip always works
 //
 // Run `npm run package` (builds first). `--tag v1.2.3` (or RELEASE_TAG) also checks the tag matches
 // the version. `--store` makes release/ZoomCapture-v<version>-webstore.zip for the Chrome Web Store:
@@ -204,10 +206,13 @@ for (const { name, data } of entries) {
 
 const sha256 = createHash('sha256').update(zip).digest('hex');
 writeFileSync(`${zipPath}.sha256`, `${sha256}  ${fileName}\n`);
+const latestPath = join(OUT, 'ZoomCapture.zip');
+if (!store) writeFileSync(latestPath, zip);
 
 const megabytes = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const unpacked = entries.reduce((sum, { data }) => sum + data.length, 0);
 console.log(`ZoomCapture ${version}${tag ? ` (${tag})` : ''}`);
 console.log(`  ${relative(ROOT, zipPath)}  ${megabytes(statSync(zipPath).size)} (${entries.length} files, ${megabytes(unpacked)} unpacked)`);
+if (!store) console.log(`  ${relative(ROOT, latestPath)}  (the same file, for the "latest" download link)`);
 console.log(`  sha256 ${sha256}`);
 console.log('  checked: Manifest V3, versions match, referenced files present, no private or development files, read back byte-for-byte');
