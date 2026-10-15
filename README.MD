@@ -3,6 +3,10 @@
 A professional screen recorder for Chrome with automatic zoom effects.
 Built on Manifest V3, React 19, TypeScript, Vite 8, Tailwind CSS 4, Lucide icons and IndexedDB.
 
+[![Download ZoomCapture](https://img.shields.io/github/v/release/nusratjahan7/ZoomCapture?label=Download&logo=googlechrome&logoColor=white&style=for-the-badge&color=7c5cff)](https://github.com/nusratjahan7/ZoomCapture/releases/latest/download/ZoomCapture.zip)
+
+The button downloads the newest version as a ZIP. Extract it and load it into Chrome, as described in [Install from GitHub Releases](#install-from-github-releases).
+
 **Status: version 1.0 — Module 10 (project library, settings, performance, reliability and final QA) is complete.**
 - **Dashboard:** recordings and their projects, with search, sorting, thumbnails, sizes, dates, duplicate and project rebuild.
 - **Settings:** export, aspect and camera-bubble defaults for new projects, live permission status, privacy information and a diagnostics log with names removed.
@@ -16,7 +20,7 @@ Release notes, the QA results, known limitations and the Chrome Web Store checkl
 
 No build tools needed: each release has a ready-to-load ZIP.
 
-1. Open the [**Releases** page](https://github.com/nusratjahan7/ZoomCapture/releases/latest) and, under **Assets**, download **`ZoomCapture-vX.Y.Z.zip`** (not the "Source code" archives).
+1. Click the **Download** button at the top of this page. Or open the [**Releases** page](https://github.com/nusratjahan7/ZoomCapture/releases/latest) and, under **Assets**, download **`ZoomCapture-vX.Y.Z.zip`**. `ZoomCapture.zip` on the same page is the same file. Don't download the "Source code" archives: they can't be loaded into Chrome.
 2. Extract the ZIP to a folder you will **keep**, for example `Documents\ZoomCapture`. Chrome loads the extension from this folder every time it starts, so don't delete or move it. Don't leave it in Downloads if you clean that folder out.
 3. Open `chrome://extensions` (or `edge://extensions` in Microsoft Edge).
 4. Turn on **Developer mode** (top right).
@@ -33,7 +37,7 @@ Chrome 120 or newer is required. Camera, microphone and screen access are asked 
 
 Chrome doesn't update extensions loaded this way, so updating is done by hand. Your recordings and settings are kept **as long as the extension is loaded from the same folder**: Chrome stores them under an extension ID that comes from the folder's location.
 
-1. Download the new `ZoomCapture-vX.Y.Z.zip` from [Releases](https://github.com/nusratjahan7/ZoomCapture/releases/latest).
+1. Download the new version with the **Download** button at the top of this page, or `ZoomCapture-vX.Y.Z.zip` from [Releases](https://github.com/nusratjahan7/ZoomCapture/releases/latest).
 2. Close any open ZoomCapture tabs (studio, editor, settings). Don't update during a recording or an export.
 3. In your existing ZoomCapture folder, delete the old files, then extract the new ZIP **into the same folder**. Check `manifest.json` is directly inside it again.
 4. Open `chrome://extensions` and click the **Reload** arrow on ZoomCapture's card. The card shows the new version number.
@@ -82,7 +86,7 @@ npm run package                # typecheck, build, then release/ZoomCapture-v1.0
 npm run package:verify         # extract that ZIP with the system's unzip tool, load it into Chrome, record a test clip
 ```
 
-`npm run package` refuses a build with mismatched versions, missing files, source maps, sources, `.env` files or keys. It reads the ZIP back byte-for-byte, and it produces the same bytes for the same build. The ZIP contains `dist/` (with `manifest.json` at its root) and the two files of the optional Windows helper, under `native/windows/`. For the Chrome Web Store, `node scripts/package.mjs --store` makes `ZoomCapture-v1.0.1-webstore.zip` without the helper.
+`npm run package` refuses a build with mismatched versions, missing files, source maps, sources, `.env` files or keys. It reads the ZIP back byte-for-byte, and it produces the same bytes for the same build. Each release gets the ZIP twice: as `ZoomCapture-vX.Y.Z.zip`, and as `ZoomCapture.zip` for the README's **Download** button (`…/releases/latest/download/ZoomCapture.zip` always serves the newest release). The ZIP contains `dist/` (with `manifest.json` at its root) and the two files of the optional Windows helper, under `native/windows/`. For the Chrome Web Store, `node scripts/package.mjs --store` makes `ZoomCapture-v1.0.1-webstore.zip` without the helper.
 
 **Steps for each release:**
 
